@@ -1,0 +1,13 @@
+d:\TokenVector Numerics\src\TokenVector.Numerics\obj\Release\net8.0\TokenVector.Numerics.GeneratedMSBuildEditorConfig.editorconfig
+d:\TokenVector Numerics\src\TokenVector.Numerics\obj\Release\net8.0\TokenVector.Numerics.AssemblyInfoInputs.cache
+d:\TokenVector Numerics\src\TokenVector.Numerics\obj\Release\net8.0\TokenVector.Numerics.AssemblyInfo.cs
+d:\TokenVector Numerics\src\TokenVector.Numerics\obj\Release\net8.0\TokenVector.Numerics.csproj.CoreCompileInputs.cache
+d:\TokenVector Numerics\src\TokenVector.Numerics\bin\Release\net8.0\TokenVector.Numerics.deps.json
+d:\TokenVector Numerics\src\TokenVector.Numerics\bin\Release\net8.0\TokenVector.Numerics.dll
+d:\TokenVector Numerics\src\TokenVector.Numerics\bin\Release\net8.0\TokenVector.Numerics.pdb
+d:\TokenVector Numerics\src\TokenVector.Numerics\bin\Release\net8.0\TokenVector.Numerics.xml
+d:\TokenVector Numerics\src\TokenVector.Numerics\obj\Release\net8.0\TokenVector.Numerics.dll
+d:\TokenVector Numerics\src\TokenVector.Numerics\obj\Release\net8.0\refint\TokenVector.Numerics.dll
+d:\TokenVector Numerics\src\TokenVector.Numerics\obj\Release\net8.0\TokenVector.Numerics.xml
+d:\TokenVector Numerics\src\TokenVector.Numerics\obj\Release\net8.0\TokenVector.Numerics.pdb
+d:\TokenVector Numerics\src\TokenVector.Numerics\obj\Release\net8.0\ref\TokenVector.Numerics.dll
