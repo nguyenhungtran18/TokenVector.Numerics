@@ -1,22 +1,21 @@
 # TOKENVECTOR LANGUAGE - NATIVE NUMERICS & TENSOR SYNTAX SPECIFICATION
-### (Chuẩn cú pháp toán học và tensor bản địa cho ngôn ngữ TokenVector)
 
 [ 🇬🇧 English ](TOKENVECTOR_SYNTAX_SPEC.md) | [ 🇻🇳 Tiếng Việt ](TOKENVECTOR_SYNTAX_SPEC_VI.md)
 
-**Mã tài liệu:** TKV-SPEC-SYNTAX-2026-V1  
-**Mục tiêu:** Định nghĩa chuẩn cú pháp toán học số học, tensor đa chiều và tự động vi phân hoàn toàn bản địa cho ngôn ngữ **TokenVector**, độc lập 100%, không phụ thuộc hay vay mượn tiền tố `numpy` / `np`.
+**Document Code:** TKV-SPEC-SYNTAX-2026-V1  
+**Target:** Formal native mathematics, multidimensional tensor, and automatic differentiation syntax specification for the **TokenVector** programming language—100% standalone, with zero dependencies on or borrowing from `numpy` / `np`.
 
 ---
 
-## 1. Hệ thống Không gian tên & Khởi tạo (Namespaces & Imports)
+## 1. Namespaces & Module Imports
 
-Trong TokenVector, tiền tố gốc bản địa duy nhất là **`tv`** (hoặc tên đầy đủ **`tokenvector`**):
+In TokenVector, the sole native top-level prefix is **`tv`** (or the full module name **`tokenvector`**):
 
 ```python
-# 1. Nhập module cốt lõi
+# 1. Import core module
 import tv
 
-# 2. Nhập các submodule chuyên biệt theo chuẩn TokenVector
+# 2. Import specific submodules and constructs
 from tv import array, tensor, zeros, ones, full, linspace
 from tv import linalg, autograd, nn, optim
 from tv import science, finance, physics, quantum, spatial
@@ -24,28 +23,28 @@ from tv import science, finance, physics, quantum, spatial
 
 ---
 
-## 2. Cú pháp Mảng Đa Chiều & Bộ Nhớ (NDArray & Memory)
+## 2. Multidimensional Arrays & Memory Allocation (NDArray)
 
 ```python
-# Khởi tạo mảng n-chiều
+# Create multidimensional arrays
 a = tv.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], shape=[2, 3])
 b = tv.zeros([4, 4])
 c = tv.ones([2, 3, 4])
 d = tv.linspace(start=0.0, stop=1.0, num=100)
 
-# Cắt lát Zero-Copy $O(1)$
+# Zero-Copy Slicing $O(1)$
 view = a[0:2, 1:3]
 
-# Cấp phát bộ nhớ Unmanaged (Native Memory) với cú pháp `with`
+# Allocate Unmanaged Native Memory via `with` block
 with tv.allocate_native([1024, 1024], dtype=tv.f32) as native_buf:
-    # Xử lý ma trận lớn với Zero GC Pressure
+    # High-throughput computation with Zero Garbage Collection pressure
     pass
-# Tự động giải phóng bộ nhớ RAM ngay khi thoát khối `with`
+# RAM is automatically freed immediately upon exiting the `with` block
 ```
 
 ---
 
-## 3. Cú pháp Đại Số Tuyến Tính & Ma Trận (`tv.linalg`)
+## 3. Linear Algebra & Matrix Computing (`tv.linalg`)
 
 ```python
 import tv.linalg as la
@@ -53,35 +52,35 @@ import tv.linalg as la
 A = tv.array([[4.0, 1.0], [1.0, 3.0]])
 B = tv.array([[2.0, 0.0], [0.0, 5.0]])
 
-# Nhân ma trận bằng toán tử `@` hoặc hàm `la.matmul`
+# Matrix Multiplication using the `@` operator or `la.matmul`
 C = A @ B
 C = la.matmul(A, B)
 
-# Giải hệ phương trình Ax = b
+# Solve linear systems: Ax = b
 x = la.solve(A, b)
 
-# Phân rã ma trận
+# Matrix Decompositions
 U, S, Vt = la.svd(A)
 eigen_vals, eigen_vecs = la.eigen(A)
 
-# Co rút tensor Einstein Summation
+# Einstein Summation Contraction
 result = la.einsum("ij,jk->ik", A, B)
 
-# Ma trận mũ giải tích Padé và Căn bậc hai ma trận
+# Analytical Padé Matrix Exponential and Square Root
 expA = la.expm(A)
 sqrtA = la.sqrtm(A)
 ```
 
 ---
 
-## 4. Cú pháp Tự Động Vi Phân & Deep Learning (`tv.autograd` & `tv.nn`)
+## 4. Automatic Differentiation & Deep Learning (`tv.autograd` & `tv.nn`)
 
 ```python
 from tv import tensor
 import tv.nn as nn
 import tv.optim as optim
 
-# 1. Tự động vi phân (Dynamic Graph Autograd)
+# 1. Dynamic Graph Reverse-Mode Autograd
 x = tv.tensor(3.0, requires_grad=True)
 y = tv.tensor(2.0, requires_grad=True)
 
@@ -91,7 +90,7 @@ z.backward()
 print(x.grad)  # 6.0 (2*x)
 print(y.grad)  # -4.0 (-2*y)
 
-# 2. Định nghĩa mô hình Mạng Nơ-ron (Neural Network)
+# 2. Neural Network Model Architecture
 class MLP(nn.Module):
     def __init__(self):
         super().__init__()
@@ -104,7 +103,7 @@ class MLP(nn.Module):
         x = self.norm(x)
         return self.fc2(x).sigmoid()
 
-# 3. Vòng lặp huấn luyện chuẩn TokenVector
+# 3. Standard TokenVector Training Loop
 model = MLP()
 optimizer = optim.AdamW(model.parameters(), lr=0.01, weight_decay=0.01)
 
@@ -118,42 +117,42 @@ for epoch in range(100):
 
 ---
 
-## 5. Cú pháp Toán Học Đa Ngành Chuyên Sâu
+## 5. Domain-Specific Mathematics Modules
 
-### A. Cơ Học Không Gian & Thiên Văn (`tv.astro`)
+### A. Astrodynamics & Space Mechanics (`tv.astro`)
 ```python
 import tv.astro as astro
 
-# Giải Kepler và chuyển đổi quỹ đạo
+# Solve Kepler's equation and orbit propagation
 E = astro.solve_kepler(mean_anomaly=1.25, eccentricity=0.05)
 r, v = astro.kepler_to_cartesian(a=7000.0, e=0.01, i=0.9, raan=1.2, omega=0.5, nu=0.8)
 dv1, dv2, total_dv, tof = astro.hohmann_transfer(r_leo=6678.0, r_geo=42164.0)
 ```
 
-### B. Toán Tài Chính Định Lượng (`tv.finance`)
+### B. Quantitative Finance (`tv.finance`)
 ```python
 import tv.finance as fin
 
-# Định giá quyền chọn Black-Scholes & The Greeks
+# Black-Scholes-Merton option pricing & Greeks
 call_price = fin.black_scholes_call(s=100.0, k=100.0, t=1.0, r=0.05, sigma=0.20)
 delta, gamma, vega, theta, rho = fin.option_greeks(s=100.0, k=100.0, t=1.0, r=0.05, sigma=0.20)
 sharpe = fin.sharpe_ratio(weights, returns, cov_matrix, risk_free_rate=0.02)
 ```
 
-### C. Vật Lý Tính Toán & LBM CFD (`tv.physics`)
+### C. Computational Physics & LBM Fluid Dynamics (`tv.physics`)
 ```python
 import tv.physics as phys
 
-# Tích phân vi phân Runge-Kutta 4 & Thủy động lực học Navier-Stokes LBM
+# 4th-order Runge-Kutta ODE integration & LBM D2Q9 Navier-Stokes
 trajectory = phys.solve_rk4(harmonic_oscillator, t0=0.0, t1=10.0, y0=init_state, steps=200)
 lbm_step = phys.lattice_boltzmann_2d(density, velocity, tau=0.6)
 ```
 
-### D. Điện Toán Lượng Tử (`tv.quantum`)
+### D. Quantum Computing (`tv.quantum`)
 ```python
 import tv.quantum as qtm
 
-# Trạng thái Bell lượng tử và mạch QFT
+# Quantum Bell state simulation and circuit QFT
 state = qtm.QState(num_qubits=2)
 state.h(0)
 state.cnot(control=0, target=1)
@@ -162,9 +161,9 @@ entropy = state.von_neumann_entropy()
 
 ---
 
-## 6. Bảng Ánh Xạ Cú Pháp (TokenVector Language $\leftrightarrow$ .NET CIL Runtime)
+## 6. Syntax Mapping Table (TokenVector Language $\leftrightarrow$ .NET CIL Runtime)
 
-| Cú pháp Ngôn ngữ TokenVector | Ánh xạ Native .NET CIL (`TokenVector.Numerics.dll`) |
+| TokenVector Language Syntax | Native .NET CIL Mapping (`TokenVector.Numerics.dll`) |
 | :--- | :--- |
 | `import tv` | `using TokenVector.Numerics.Core;` |
 | `tv.array([1, 2, 3])` | `NDArray<double>.FromArray([1, 2, 3])` |
