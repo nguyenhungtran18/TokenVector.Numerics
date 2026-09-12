@@ -10,6 +10,10 @@
 *.user
 *.suo
 
+## Internal Docs (Not pushed)
+INTERNAL_*.md
+internal/
+
 ## OS generated
 .DS_Store
 Thumbs.db
