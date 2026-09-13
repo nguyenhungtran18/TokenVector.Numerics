@@ -57,12 +57,12 @@ The library serves as the **Grand Unified Runtime Math & Tensor Engine**, coveri
 
 ## 🧪 Verification & Quality Assurance
 
-All **75/75 automated unit tests** passed with zero failures in Release mode:
+All **84/84 automated unit tests** passed with zero failures in Release mode:
 ```powershell
 dotnet test TokenVector.Numerics.sln -c Release
 ```
 ```text
-Passed!  - Failed: 0, Passed: 75, Skipped: 0, Total: 75, Duration: 146 ms - TokenVector.Numerics.Tests.dll (net8.0)
+Passed!  - Failed: 0, Passed: 84, Skipped: 0, Total: 84, Duration: 143 ms - TokenVector.Numerics.Tests.dll (net8.0)
 ```
 
 ---

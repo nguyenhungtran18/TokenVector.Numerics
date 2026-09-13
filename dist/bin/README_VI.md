@@ -57,10 +57,10 @@ Thư viện đóng vai trò là **Runtime Math & Tensor Engine Đa Ngành Toàn 
 
 ## 🧪 Kết quả Kiểm thử
 
-Toàn bộ **75/75 unit tests tự động** đã vượt qua thành công:
+Toàn bộ **84/84 unit tests tự động** đã vượt qua thành công:
 ```powershell
 dotnet test TokenVector.Numerics.sln -c Release
 ```
 ```text
-Passed!  - Failed: 0, Passed: 75, Skipped: 0, Total: 75, Duration: 146 ms - TokenVector.Numerics.Tests.dll (net8.0)
+Passed!  - Failed: 0, Passed: 84, Skipped: 0, Total: 84, Duration: 143 ms - TokenVector.Numerics.Tests.dll (net8.0)
 ```
