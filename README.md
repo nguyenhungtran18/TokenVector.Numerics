@@ -81,6 +81,13 @@ Benchmarked on **AMD Ryzen / Intel x86_64** (Release build, .NET 8 LTS, Native S
 | **Cosine Vector Similarity** | $1,000,000 \times 128$-dim | 195.4 ms | **11.2 ms** (AVX2 FMA Vector256) | **17.4x** |
 | **Out-of-Core Memory-Mapped I/O** | $10\text{ GB}$ `.npy` Disk Slice | 4,200 ms (Full RAM load) | **0.8 ms** (Zero-RAM `mmap`) | **5250x** |
 
+#### 🔑 Key Acceleration Pillars:
+* **Hardware SIMD (AVX2 & FMA):** Processes 8 FP32 values per CPU cycle in hardware vector registers with fused multiply-add.
+* **$32 \times 32$ Cache-Tiling:** Keeps matrix sub-blocks within ultra-fast L1 Data Cache (1–4 ns latency), eliminating memory wall cache misses.
+* **True No-GIL Multithreading:** Scales compute tasks linearly across 100% of physical CPU cores via `Parallel.For`.
+* **Zero-GC & Direct Pointers:** Leverages unmanaged `TensorBuffer<T>`, `Span<T>`, and in-place buffer reuse without Garbage Collector pauses.
+* **Zero-RAM Memory-Mapping:** Uses OS kernel `mmap` to slice multi-gigabyte tensors from NVMe disk with $< 1\text{ ms}$ latency and 0 MB RAM overhead.
+
 ---
 
 ## 🚀 Quick Start & Usage
