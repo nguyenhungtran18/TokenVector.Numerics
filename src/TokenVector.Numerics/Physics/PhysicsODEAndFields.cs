@@ -52,6 +52,62 @@ public static class PhysicsODEAndFields
         return (timestamps, trajectory);
     }
 
+    /// <summary>
+    /// Integrates a general Hamiltonian dynamical system H(q, p) = (1/2m) p^T p + V(q) with force F(q) = -\nabla V(q)
+    /// using the energy-preserving symplectic Leapfrog / Velocity-Verlet method from t0 to tEnd.
+    /// Preserves phase-space symplectic 2-form and total energy with zero secular drift.
+    /// </summary>
+    public static (double[] Timestamps, NDArray<double>[] Positions, NDArray<double>[] Momenta) SolveSymplecticVerlet(
+        Func<NDArray<double>, NDArray<double>> forceFunc,
+        double t0, double tEnd,
+        NDArray<double> q0, NDArray<double> p0,
+        double mass, int numSteps)
+    {
+        if (numSteps <= 0) throw new ArgumentOutOfRangeException(nameof(numSteps));
+        if (mass <= 0.0) throw new ArgumentException("Mass must be positive.", nameof(mass));
+        if (q0.Shape.SequenceEqual(p0.Shape) == false)
+            throw new ArgumentException("q0 and p0 must have identical shape.");
+
+        double dt = (tEnd - t0) / numSteps;
+        double halfDt = 0.5 * dt;
+        double invMass = 1.0 / mass;
+
+        var timestamps = new double[numSteps + 1];
+        var positions = new NDArray<double>[numSteps + 1];
+        var momenta = new NDArray<double>[numSteps + 1];
+
+        timestamps[0] = t0;
+        positions[0] = q0.Clone();
+        momenta[0] = p0.Clone();
+
+        double t = t0;
+        var q = q0.Clone();
+        var p = p0.Clone();
+        var f = forceFunc(q);
+
+        for (int i = 0; i < numSteps; i++)
+        {
+            // 1. Kick: p_{n+1/2} = p_n + (dt/2) * F(q_n)
+            var pMid = p + f * halfDt;
+
+            // 2. Drift: q_{n+1} = q_n + dt * (p_{n+1/2} / mass)
+            q = q + pMid * (dt * invMass);
+
+            // 3. New force: F(q_{n+1})
+            f = forceFunc(q);
+
+            // 4. Kick: p_{n+1} = p_{n+1/2} + (dt/2) * F(q_{n+1})
+            p = pMid + f * halfDt;
+            t += dt;
+
+            timestamps[i + 1] = t;
+            positions[i + 1] = q.Clone();
+            momenta[i + 1] = p.Clone();
+        }
+
+        return (timestamps, positions, momenta);
+    }
+
     #endregion
 
     #region N-Body Gravitational Dynamics (Symplectic Verlet)

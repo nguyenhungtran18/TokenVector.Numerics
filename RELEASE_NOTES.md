@@ -1,110 +1,70 @@
-# 🚀 TokenVector.Numerics v1.0.0 Release Notes
+# 🚀 TokenVector.Numerics v1.0.1 Release Notes
 
 [🇻🇳 Xem bản Tiếng Việt](RELEASE_NOTES_VI.md)
 
 ---
 
-**Release Version:** `v1.0.0`  
+**Release Version:** `v1.0.1`  
 **Release Date:** September 13, 2026  
 **Target Framework:** .NET 8.0 LTS (C# 12)  
 **License:** [MIT License](LICENSE)  
 **Repository:** [https://github.com/nguyenhungtran18/TokenVector.Numerics](https://github.com/nguyenhungtran18/TokenVector.Numerics)  
-**NuGet Package:** `TokenVector.Numerics` (v1.0.0)
+**NuGet Package:** `TokenVector.Numerics` (v1.0.1)
 
 ---
 
-## 🌟 Overview
+## 🌟 Overview & What's New in v1.0.1
 
-We are thrilled to announce the official **v1.0.0 production release** of **TokenVector.Numerics** — an enterprise-grade, hardware-accelerated multidimensional tensor, scientific computing, and reverse-mode automatic differentiation (Autograd) engine written entirely from scratch in C# 12 and .NET 8 LTS with zero third-party dependencies.
-
-`TokenVector.Numerics` is designed as the high-performance runtime core for the **TokenVector** compiled programming language and as a standalone high-throughput numerical foundation for AI, robotics, and scientific simulations in .NET.
+The **v1.0.1 release** introduces critical high-order mathematical, optimization, and scientific signal processing capabilities to `TokenVector.Numerics`. This update expands linear algebra decomposition, advanced special transcendental functions, discrete wavelet analysis, quadratic programming solvers for drone/robotics control, and symplectic Hamiltonian integrators.
 
 ---
 
-## 🚀 Key Highlights & Major Features
+## 🚀 Key Additions in v1.0.1
 
-### 1. Dynamic Reverse-Mode Autograd Engine
-* **Full DAG Computational Graph:** Dynamic reverse-mode graph construction with topological sorting backward execution.
-* **Automatic Gradient Unbroadcasting:** Automatically performs multi-dimensional sum-reductions during backpropagation across broadcasted axes, guaranteeing gradient-to-weight shape consistency.
-* **Tensor Lifecycle Management:** Supports `.backward()`, `.zero_grad()`, `.detach()`, and in-place gradient accumulation.
-* **Operator Overloading:** Full operator overloading (`+`, `-`, `*`, `/`, `^`, unary `-`, `@` matrix multiplication).
+### 1. Advanced Special Functions (`SpecialFunctions`)
+* **Lambert W Function (`LambertW`):** Computes $W_k(x)$ where $W(x) e^{W(x)} = x$ using Halley's 3rd-order root-finding method. Supports both principal branch $k=0$ (for $x \ge -1/e$) and secondary branch $k=-1$ (for $-1/e \le x < 0$) with full scalar and tensor support.
+* **Bessel Functions of the Second Kind (`BesselY0`, `BesselK0`):**
+  * $Y_0(x)$ (Neumann function of order 0).
+  * $K_0(x)$ (Modified Bessel function of the second kind of order 0).
+* **Airy Functions (`AiryAi`, `AiryBi`):** Computes solutions to the differential equation $y'' - x y = 0$ using Maclaurin series around zero and asymptotic expansions for large $|x|$.
 
-### 2. Neural Modules & Advanced Optimizers
-* **Layer Architectures:** `Linear<T>` (with Kaiming Uniform weight initialization), `Sequential<T>`, and `RMSNorm<T>` (Root Mean Square Normalization).
-* **Activation Functions & Loss Kernels:** Vectorized Vector-Jacobian Products (VJP) for `ReLU`, `GELU`, `Sigmoid`, `Tanh`, `Softmax`, `MSELoss`, and numerically stable Log-Sum-Exp `CrossEntropyLoss`.
-* **First-Class Optimizers:**
-  * **SGD:** Stochastic Gradient Descent with classical Momentum and $L_2$ Weight Decay.
-  * **AdamW:** Adaptive Moment Estimation with decoupled weight decay and complete first/second moment bias correction ($m_t, v_t$).
+### 2. Matrix Decompositions & Matrix Equations (`LinAlg`)
+* **Real Schur Decomposition (`Decomposition.Schur`):** Decomposes square matrix $A = Q T Q^T$, where $Q$ is an orthogonal matrix and $T$ is quasi-upper triangular, via Hessenberg reduction and shifted QR iteration.
+* **Sylvester Equation Solver (`Decomposition.SolveSylvester`):** Solves the continuous Sylvester matrix equation $A X + X B = C$ (and Lyapunov equations when $B = A^T$) using Kronecker vectorization.
 
-### 3. Hardware SIMD & Zero-GC Memory Architecture
-* **Unmanaged Memory Management:** Employs `NativeMemory.AllocZeroed` and pointer arithmetic to guarantee zero-GC allocations during high-frequency matrix operations.
-* **SIMD Intrinsics:** Accelerated via `Vector256<float>`, `Vector256<double>`, AVX2, and FMA hardware instructions for maximum multi-core CPU throughput.
+### 3. Wavelet & Analytic Signal Processing (`SignalProcessing`)
+* **Discrete Wavelet Transform (`DWT` & `IDWT`):** 1D single-level forward and inverse wavelet transform supporting Haar and Daubechies-4 (`db4`) filter banks with exact signal reconstruction.
+* **Hilbert Transform & Analytic Signal (`Hilbert`, `AnalyticSignal`):** Computes the analytic signal $x_a(t) = x(t) + i \mathcal{H}[x(t)]$ in $O(N \log N)$ via FFT.
 
-### 4. 34 Comprehensive Scientific Domains
-* **Linear Algebra (`LinAlg`):** Fast Matrix Multiplication ($O(N^3)$ optimized), Singular Value Decomposition (SVD), Eigenvalue/Eigenvector solver, Cholesky Decomposition, and Padé Approximation Matrix Exponential ($\exp(A)$).
-* **Signal Processing:** 1D/2D Fast Fourier Transform (Cooley-Tukey Radix-2 FFT) and Discrete Cosine Transform (DCT).
-* **Astrodynamics & Aerospace:** Keplerian orbital element propagation, Lambert problem solver, and orbital state vector conversions.
-* **Robotics & Dynamics:** 6-DoF Quadrotor rigid-body dynamics, aerodynamic drag force calculation, and Quaternion 3D spatial rotations.
-* **Financial Engineering:** Black-Scholes European option pricing, Greeks sensitivity calculation ($\Delta, \Gamma, \Theta, \text{Vega}, \rho$), and Monte Carlo path simulations.
-* **Quantum Computing:** Qubit statevector simulators and quantum logic gates ($H$, $X$, $Y$, $Z$, $\text{CNOT}$, Phase).
+### 4. Quadratic Programming Solver (`Optimize.QPSolve`)
+* **Convex QP Solver:** Solves general convex quadratic programs:
+  $$\min_x \frac{1}{2} x^T P x + q^T x \quad \text{subject to} \quad G x \le h, \quad A x = b, \quad lb \le x \le ub$$
+* **ADMM Operator-Splitting Engine:** Matrix factorization with proximal operator projections, optimized for real-time model predictive control (NMPC), robotics trajectory optimization, and drone swarms.
+
+### 5. Symplectic Hamiltonian Integrator (`PhysicsODEAndFields.SolveSymplecticVerlet`)
+* **Energy-Preserving Symplectic Leapfrog / Velocity-Verlet:** Integrates Hamiltonian dynamics $H(q, p) = \frac{1}{2m} p^T p + V(q)$ preserving phase-space volume and total energy over long trajectories without secular energy drift.
 
 ---
 
 ## 📊 Verification & Test Metrics
 
-The entire release has been validated through an extensive unit test suite with 100% pass rate:
-
-* **Total Tests:** **75 / 75 Tests Passed**
+* **Total Tests:** **84 / 84 Tests Passed (100% Pass)**
 * **Failures:** **0**
-* **Execution Time:** **~146 ms**
+* **Execution Time:** **~138 ms**
 * **Verification Suite:** `TokenVector.Numerics.Tests` (xUnit, Release x64)
-* **Full Test Matrix:** See [`TEST_REPORT.md`](TEST_REPORT.md).
 
 ---
 
 ## 📦 Distribution Packages (`dist/`)
 
-The compiled release artifacts are available in the `dist/` directory:
-
-| Artifact | Path | Size | Description |
-| :--- | :--- | :---: | :--- |
-| **Release Zip** | `dist/TokenVector.Numerics-v1.0.0-Release.zip` | `174 KB` | Complete standalone release bundle |
-| **NuGet Package** | `dist/nuget/TokenVector.Numerics.1.0.0.nupkg` | `123 KB` | Official NuGet package |
-| **Binary DLL** | `dist/bin/TokenVector.Numerics.dll` | `234 KB` | Optimized standalone .NET 8 assembly |
+| Artifact | Path | Description |
+| :--- | :--- | :--- |
+| **Release Zip** | `dist/TokenVector.Numerics-v1.0.1-Release.zip` | Standalone v1.0.1 release bundle |
+| **NuGet Package** | `dist/nuget/TokenVector.Numerics.1.0.1.nupkg` | Official v1.0.1 NuGet package |
+| **Binary DLL** | `dist/bin/TokenVector.Numerics.dll` | Optimized standalone .NET 8 assembly |
 
 ---
 
-## 💻 Quick Code Example (C# / XOR Neural Convergence)
+## 🤝 Contributing & Community
 
-```csharp
-using TokenVector.Numerics.Autograd;
-using TokenVector.Numerics.Autograd.NN;
-using TokenVector.Numerics.Autograd.Optim;
-
-// 1. Build a 2-layer MLP (2 -> 8 -> 1)
-var model = new Sequential<float>(
-    new Linear<float>(2, 8),
-    new Linear<float>(8, 1)
-);
-var optimizer = new AdamW<float>(model.Parameters(), lr: 0.05f);
-
-// 2. Training Data (XOR)
-var x = Tensor<float>.From(new float[,] { {0,0}, {0,1}, {1,0}, {1,1} }, requiresGrad: false);
-var y = Tensor<float>.From(new float[,] { {0}, {1}, {1}, {0} }, requiresGrad: false);
-
-// 3. Training Loop
-for (int epoch = 0; epoch < 200; epoch++)
-{
-    optimizer.ZeroGrad();
-    var pred = model.Forward(x);
-    var loss = pred.MseLoss(y);
-    loss.Backward();
-    optimizer.Step();
-}
-```
-
----
-
-## 🤝 Acknowledgments & Contributing
-
-We would like to express our gratitude to the contributors and the scientific computing community. Feedback, bug reports, and contributions are welcome on our [GitHub Repository](https://github.com/nguyenhungtran18/TokenVector.Numerics).
+Contributions, issue reports, and discussions are welcome on our [GitHub Repository](https://github.com/nguyenhungtran18/TokenVector.Numerics).

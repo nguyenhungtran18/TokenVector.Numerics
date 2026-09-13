@@ -9,7 +9,7 @@
     <LangVersion>12</LangVersion>
     <RootNamespace>TokenVector.Numerics</RootNamespace>
     <AssemblyName>TokenVector.Numerics</AssemblyName>
-    <Version>1.0.0</Version>
+    <Version>1.0.1</Version>
     <PackageId>TokenVector.Numerics</PackageId>
     <Title>TokenVector.Numerics - Enterprise Tensor &amp; Mathematical Super-Library</Title>
     <Description>Ultra high-performance tensor computing, linear algebra, optimization, signal processing, quantum computing, astrodynamics, and computational physics runtime engine for TokenVector.</Description>

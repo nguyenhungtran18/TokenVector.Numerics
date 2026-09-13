@@ -500,4 +500,199 @@ public static class OptimizationAndRootFinding
     }
 
     #endregion
+
+    #region Quadratic Programming (ADMM / Operator Splitting QP Solver)
+
+    /// <summary>
+    /// Solves Convex Quadratic Program:
+    /// Minimize (1/2) * x^T * P * x + q^T * x
+    /// Subject to: G * x &lt;= h (inequality), A * x == b (equality), lb &lt;= x &lt;= ub (box bounds).
+    /// Uses Operator-Splitting ADMM (Alternating Direction Method of Multipliers) matching OSQP standard.
+    /// </summary>
+    public static (NDArray<double> XOpt, double MinValue) QPSolve(
+        NDArray<double> P,
+        NDArray<double> q,
+        NDArray<double>? G = null,
+        NDArray<double>? h = null,
+        NDArray<double>? A = null,
+        NDArray<double>? b = null,
+        NDArray<double>? lb = null,
+        NDArray<double>? ub = null,
+        double rho = 1.0,
+        double sigma = 1e-6,
+        double tol = 1e-5,
+        int maxIter = 1000)
+    {
+        if (P.Rank != 2 || P.Shape[0] != P.Shape[1])
+            throw new ArgumentException("P matrix must be square 2D.", nameof(P));
+
+        int n = P.Shape[0];
+        if (q.TotalLength != n)
+            throw new ArgumentException("q vector must have length matching P dimension.", nameof(q));
+
+        // Stack all constraints into C_mat * x in [l_vec, u_vec]
+        var constraintRows = new List<double[]>();
+        var lList = new List<double>();
+        var uList = new List<double>();
+
+        // 1. Equality constraints A * x == b => b <= A * x <= b
+        if (A != null && b != null)
+        {
+            int mA = A.Shape[0];
+            for (int i = 0; i < mA; i++)
+            {
+                double[] row = new double[n];
+                for (int j = 0; j < n; j++) row[j] = A[i, j];
+                constraintRows.Add(row);
+                lList.Add(b[i]);
+                uList.Add(b[i]);
+            }
+        }
+
+        // 2. Inequality constraints G * x <= h => -inf <= G * x <= h
+        if (G != null && h != null)
+        {
+            int mG = G.Shape[0];
+            for (int i = 0; i < mG; i++)
+            {
+                double[] row = new double[n];
+                for (int j = 0; j < n; j++) row[j] = G[i, j];
+                constraintRows.Add(row);
+                lList.Add(double.NegativeInfinity);
+                uList.Add(h[i]);
+            }
+        }
+
+        // 3. Box bounds lb <= I * x <= ub
+        if (lb != null || ub != null)
+        {
+            for (int i = 0; i < n; i++)
+            {
+                double[] row = new double[n];
+                row[i] = 1.0;
+                constraintRows.Add(row);
+                lList.Add(lb != null ? lb[i] : double.NegativeInfinity);
+                uList.Add(ub != null ? ub[i] : double.PositiveInfinity);
+            }
+        }
+
+        // If no constraints, add identity with [-inf, inf]
+        if (constraintRows.Count == 0)
+        {
+            for (int i = 0; i < n; i++)
+            {
+                double[] row = new double[n];
+                row[i] = 1.0;
+                constraintRows.Add(row);
+                lList.Add(double.NegativeInfinity);
+                uList.Add(double.PositiveInfinity);
+            }
+        }
+
+        int mTotal = constraintRows.Count;
+        var CMat = new NDArray<double>(mTotal, n);
+        var lVec = new NDArray<double>(mTotal);
+        var uVec = new NDArray<double>(mTotal);
+
+        for (int i = 0; i < mTotal; i++)
+        {
+            for (int j = 0; j < n; j++) CMat[i, j] = constraintRows[i][j];
+            lVec[i] = lList[i];
+            uVec[i] = uList[i];
+        }
+
+        var CT = CMat.MatrixTranspose(); // [n, mTotal]
+
+        // System matrix K = P + sigma * I + rho * C^T * C
+        var K = P.Clone();
+        for (int i = 0; i < n; i++) K[i, i] += sigma;
+
+        var CTC = MatrixMultiplication.MatMul(CT, CMat);
+        K = K + CTC * rho;
+
+        var (pK, lK, uK) = Decomposition.LU(K);
+
+        // State variables
+        var x = new NDArray<double>(n);
+        var z = new NDArray<double>(mTotal);
+        var y = new NDArray<double>(mTotal);
+
+        for (int iter = 0; iter < maxIter; iter++)
+        {
+            // RHS = sigma * x - q + C^T * (rho * z - y)
+            var rhs = new NDArray<double>(n, 1);
+            var rhoZMinusY = new NDArray<double>(mTotal, 1);
+            for (int i = 0; i < mTotal; i++)
+            {
+                rhoZMinusY[i, 0] = rho * z[i] - y[i];
+            }
+
+            var ctTerm = MatrixMultiplication.MatMul(CT, rhoZMinusY);
+
+            for (int i = 0; i < n; i++)
+            {
+                rhs[i, 0] = sigma * x[i] - q[i] + ctTerm[i, 0];
+            }
+
+            // Solve K * xNext = rhs
+            var pb = MatrixMultiplication.MatMul(pK, rhs);
+            var yTemp = new NDArray<double>(n, 1);
+            for (int i = 0; i < n; i++)
+            {
+                double sum = 0.0;
+                for (int j = 0; j < i; j++) sum += lK[i, j] * yTemp[j, 0];
+                yTemp[i, 0] = pb[i, 0] - sum;
+            }
+
+            var xNext = new NDArray<double>(n);
+            for (int i = n - 1; i >= 0; i--)
+            {
+                double sum = 0.0;
+                for (int j = i + 1; j < n; j++) sum += uK[i, j] * xNext[j];
+                xNext[i] = (yTemp[i, 0] - sum) / uK[i, i];
+            }
+
+            // zNext = clamp(C * xNext + y / rho, l, u)
+            var Cx = MatrixMultiplication.MatMul(CMat, xNext.Reshape(n, 1));
+            var zNext = new NDArray<double>(mTotal);
+            double primRes = 0.0;
+
+            for (int i = 0; i < mTotal; i++)
+            {
+                double val = Cx[i, 0] + y[i] / rho;
+                double clamped = Math.Clamp(val, lVec[i], uVec[i]);
+                zNext[i] = clamped;
+
+                double diff = Cx[i, 0] - clamped;
+                primRes = Math.Max(primRes, Math.Abs(diff));
+            }
+
+            // yNext = y + rho * (C * xNext - zNext)
+            double dualRes = 0.0;
+            for (int i = 0; i < mTotal; i++)
+            {
+                double diffZ = zNext[i] - z[i];
+                dualRes = Math.Max(dualRes, Math.Abs(rho * diffZ));
+                y[i] += rho * (Cx[i, 0] - zNext[i]);
+            }
+
+            x = xNext;
+            z = zNext;
+
+            if (primRes < tol && dualRes < tol)
+                break;
+        }
+
+        // Objective value = 0.5 * x^T * P * x + q^T * x
+        var Px = MatrixMultiplication.MatMul(P, x.Reshape(n, 1));
+        double obj = 0.0;
+        for (int i = 0; i < n; i++)
+        {
+            obj += 0.5 * x[i] * Px[i, 0] + q[i] * x[i];
+        }
+
+        return (x, obj);
+    }
+
+    #endregion
 }

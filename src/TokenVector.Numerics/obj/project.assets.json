@@ -11,13 +11,13 @@
     "C:\\Users\\Admin\\.nuget\\packages\\": {}
   },
   "project": {
-    "version": "1.0.0",
+    "version": "1.0.1",
     "restore": {
-      "projectUniqueName": "d:\\TokenVector Numerics\\src\\TokenVector.Numerics\\TokenVector.Numerics.csproj",
+      "projectUniqueName": "D:\\TokenVector Numerics\\src\\TokenVector.Numerics\\TokenVector.Numerics.csproj",
       "projectName": "TokenVector.Numerics",
-      "projectPath": "d:\\TokenVector Numerics\\src\\TokenVector.Numerics\\TokenVector.Numerics.csproj",
+      "projectPath": "D:\\TokenVector Numerics\\src\\TokenVector.Numerics\\TokenVector.Numerics.csproj",
       "packagesPath": "C:\\Users\\Admin\\.nuget\\packages\\",
-      "outputPath": "d:\\TokenVector Numerics\\src\\TokenVector.Numerics\\obj\\",
+      "outputPath": "D:\\TokenVector Numerics\\src\\TokenVector.Numerics\\obj\\",
       "projectStyle": "PackageReference",
       "configFilePaths": [
         "C:\\Users\\Admin\\AppData\\Roaming\\NuGet\\NuGet.Config"

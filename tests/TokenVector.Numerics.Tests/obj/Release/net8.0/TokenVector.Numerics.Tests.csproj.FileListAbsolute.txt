@@ -101,3 +101,4 @@ d:\TokenVector Numerics\tests\TokenVector.Numerics.Tests\obj\Release\net8.0\refi
 d:\TokenVector Numerics\tests\TokenVector.Numerics.Tests\obj\Release\net8.0\TokenVector.Numerics.Tests.pdb
 d:\TokenVector Numerics\tests\TokenVector.Numerics.Tests\obj\Release\net8.0\TokenVector.Numerics.Tests.genruntimeconfig.cache
 d:\TokenVector Numerics\tests\TokenVector.Numerics.Tests\obj\Release\net8.0\ref\TokenVector.Numerics.Tests.dll
+D:\TokenVector Numerics\tests\TokenVector.Numerics.Tests\obj\Release\net8.0\TokenVector.Numerics.Tests.sourcelink.json

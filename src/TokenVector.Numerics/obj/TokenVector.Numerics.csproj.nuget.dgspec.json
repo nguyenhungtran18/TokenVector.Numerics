@@ -5,7 +5,7 @@
   },
   "projects": {
     "D:\\TokenVector Numerics\\src\\TokenVector.Numerics\\TokenVector.Numerics.csproj": {
-      "version": "1.0.0",
+      "version": "1.0.1",
       "restore": {
         "projectUniqueName": "D:\\TokenVector Numerics\\src\\TokenVector.Numerics\\TokenVector.Numerics.csproj",
         "projectName": "TokenVector.Numerics",

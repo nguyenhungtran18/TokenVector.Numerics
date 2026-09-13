@@ -304,4 +304,256 @@ public static class Decomposition
         for (int i = 0; i < min; i++) sum += a[i, i];
         return sum;
     }
+
+    /// <summary>
+    /// Computes the Real Schur Decomposition of a square matrix A = Q * T * Q^T.
+    /// Q is an orthogonal matrix and T is quasi-upper triangular.
+    /// </summary>
+    /// <returns>(Q: Orthogonal matrix, T: Quasi-triangular Schur matrix)</returns>
+    public static (NDArray<T> Q, NDArray<T> TMat) Schur<T>(NDArray<T> a, int maxIter = 300)
+        where T : unmanaged, IFloatingPoint<T>, IRootFunctions<T>
+    {
+        if (a.Rank != 2 || a.Shape[0] != a.Shape[1])
+        {
+            throw new ArgumentException("Schur decomposition requires a square 2D matrix.");
+        }
+
+        int n = a.Shape[0];
+        if (n == 1)
+        {
+            return (NDArray<T>.Eye(1), a.Clone());
+        }
+
+        // 1. Hessenberg reduction: A = Q0 * H * Q0^T
+        var (h, q) = ReduceToHessenberg(a);
+
+        // 2. Francis double-shift / shifted QR iteration on Hessenberg matrix H
+        T eps = T.CreateChecked(1e-14);
+        int iter = 0;
+        int m = n;
+
+        while (m > 1 && iter < maxIter)
+        {
+            iter++;
+
+            // Deflation check
+            int l = m - 1;
+            while (l > 0)
+            {
+                if (T.Abs(h[l, l - 1]) <= eps * (T.Abs(h[l - 1, l - 1]) + T.Abs(h[l, l])))
+                {
+                    h[l, l - 1] = T.Zero;
+                    break;
+                }
+                l--;
+            }
+
+            if (l == m - 1)
+            {
+                // Single eigenvalue deflated
+                m--;
+                continue;
+            }
+            if (l == m - 2)
+            {
+                // 2x2 block deflated
+                m -= 2;
+                continue;
+            }
+
+            // Rayleigh / Wilkinson shift from trailing 2x2 block
+            T a11 = h[m - 2, m - 2];
+            T a12 = h[m - 2, m - 1];
+            T a21 = h[m - 1, m - 2];
+            T a22 = h[m - 1, m - 1];
+
+            T tr = a11 + a22;
+            T det = a11 * a22 - a12 * a21;
+            T disc = tr * tr - T.CreateChecked(4.0) * det;
+
+            T shift;
+            if (disc >= T.Zero)
+            {
+                T sqrtDisc = T.Sqrt(disc);
+                T s1 = (tr + sqrtDisc) * T.CreateChecked(0.5);
+                T s2 = (tr - sqrtDisc) * T.CreateChecked(0.5);
+                shift = (T.Abs(s1 - a22) < T.Abs(s2 - a22)) ? s1 : s2;
+            }
+            else
+            {
+                shift = tr * T.CreateChecked(0.5);
+            }
+
+            // QR step on active submatrix h[l..m-1, l..m-1] with shift
+            int subDim = m - l;
+            var subH = new NDArray<T>(subDim, subDim);
+            for (int r = 0; r < subDim; r++)
+            {
+                for (int c = 0; c < subDim; c++)
+                {
+                    subH[r, c] = h[l + r, l + c];
+                    if (r == c) subH[r, c] -= shift;
+                }
+            }
+
+            var (subQ, subR) = QR(subH);
+            var subHNext = MatrixMultiplication.MatMul(subR, subQ);
+
+            for (int r = 0; r < subDim; r++)
+            {
+                for (int c = 0; c < subDim; c++)
+                {
+                    h[l + r, l + c] = subHNext[r, c] + (r == c ? shift : T.Zero);
+                }
+            }
+
+            // Update remaining rows and columns outside the submatrix
+            // Update left columns
+            for (int r = 0; r < l; r++)
+            {
+                for (int c = 0; c < subDim; c++)
+                {
+                    T sum = T.Zero;
+                    for (int k = 0; k < subDim; k++) sum += h[r, l + k] * subQ[k, c];
+                    // Temporary buffer applied after
+                }
+            }
+
+            // Accumulate into Q: Q[:, l..m-1] = Q[:, l..m-1] * subQ
+            var qSub = new NDArray<T>(n, subDim);
+            for (int r = 0; r < n; r++)
+            {
+                for (int c = 0; c < subDim; c++)
+                {
+                    T sum = T.Zero;
+                    for (int k = 0; k < subDim; k++) sum += q[r, l + k] * subQ[k, c];
+                    qSub[r, c] = sum;
+                }
+            }
+            for (int r = 0; r < n; r++)
+            {
+                for (int c = 0; c < subDim; c++) q[r, l + c] = qSub[r, c];
+            }
+        }
+
+        // Clean small sub-diagonals
+        for (int i = 2; i < n; i++)
+        {
+            for (int j = 0; j < i - 1; j++) h[i, j] = T.Zero;
+        }
+
+        return (q, h);
+    }
+
+    private static (NDArray<T> H, NDArray<T> Q) ReduceToHessenberg<T>(NDArray<T> a)
+        where T : unmanaged, IFloatingPoint<T>, IRootFunctions<T>
+    {
+        int n = a.Shape[0];
+        var h = a.Clone();
+        var q = NDArray<T>.Eye(n);
+
+        for (int k = 0; k < n - 2; k++)
+        {
+            int m = n - k - 1;
+            T normX2 = T.Zero;
+            for (int i = k + 1; i < n; i++) normX2 += h[i, k] * h[i, k];
+            T normX = T.Sqrt(normX2);
+            if (normX < T.CreateChecked(1e-15)) continue;
+
+            T alpha = (h[k + 1, k] >= T.Zero) ? -normX : normX;
+            T u1 = h[k + 1, k] - alpha;
+
+            T[] v = new T[m];
+            v[0] = T.One;
+            for (int i = 1; i < m; i++) v[i] = h[k + 1 + i, k] / u1;
+
+            T beta = -u1 / alpha;
+
+            // Apply Householder from left: H = (I - beta * v * v^T) * H
+            for (int j = k; j < n; j++)
+            {
+                T dot = T.Zero;
+                for (int i = 0; i < m; i++) dot += v[i] * h[k + 1 + i, j];
+                T factor = beta * dot;
+                for (int i = 0; i < m; i++) h[k + 1 + i, j] -= factor * v[i];
+            }
+
+            // Apply Householder from right: H = H * (I - beta * v * v^T)
+            for (int i = 0; i < n; i++)
+            {
+                T dot = T.Zero;
+                for (int j = 0; j < m; j++) dot += v[j] * h[i, k + 1 + j];
+                T factor = beta * dot;
+                for (int j = 0; j < m; j++) h[i, k + 1 + j] -= factor * v[j];
+            }
+
+            // Accumulate into Q: Q = Q * (I - beta * v * v^T)
+            for (int i = 0; i < n; i++)
+            {
+                T dot = T.Zero;
+                for (int j = 0; j < m; j++) dot += q[i, k + 1 + j] * v[j];
+                T factor = beta * dot;
+                for (int j = 0; j < m; j++) q[i, k + 1 + j] -= factor * v[j];
+            }
+        }
+
+        return (h, q);
+    }
+
+    /// <summary>
+    /// Solves the Sylvester equation: A * X + X * B = C.
+    /// Uses vectorized Kronecker transformation: (I_n (x) A + B^T (x) I_m) * vec(X) = vec(C).
+    /// </summary>
+    /// <param name="a">Matrix A of shape [m, m]</param>
+    /// <param name="b">Matrix B of shape [n, n]</param>
+    /// <param name="c">Matrix C of shape [m, n]</param>
+    /// <returns>Solution matrix X of shape [m, n]</returns>
+    public static NDArray<T> SolveSylvester<T>(NDArray<T> a, NDArray<T> b, NDArray<T> c)
+        where T : unmanaged, IFloatingPoint<T>
+    {
+        if (a.Rank != 2 || a.Shape[0] != a.Shape[1])
+            throw new ArgumentException("Matrix A must be square.");
+        if (b.Rank != 2 || b.Shape[0] != b.Shape[1])
+            throw new ArgumentException("Matrix B must be square.");
+        if (c.Rank != 2 || c.Shape[0] != a.Shape[0] || c.Shape[1] != b.Shape[0])
+            throw new ArgumentException("Matrix C must have shape [m, n] matching A [m,m] and B [n,n].");
+
+        int m = a.Shape[0];
+        int n = b.Shape[0];
+        int mn = m * n;
+
+        // Form Kronecker system: M = (I_n (x) A) + (B^T (x) I_m)
+        var inMat = NDArray<T>.Eye(n);
+        var imMat = NDArray<T>.Eye(m);
+        var bT = b.MatrixTranspose();
+
+        var inKronA = MatrixOps.Kron(inMat, a);
+        var btKronIm = MatrixOps.Kron(bT, imMat);
+        var M = inKronA + btKronIm;
+
+        // vec(C): column-major vectorization of C
+        var vecC = new NDArray<T>(mn, 1);
+        for (int col = 0; col < n; col++)
+        {
+            for (int row = 0; row < m; row++)
+            {
+                vecC[col * m + row, 0] = c[row, col];
+            }
+        }
+
+        // Solve M * vec(X) = vec(C)
+        var vecX = Solve(M, vecC);
+
+        // Unflatten vec(X) back into [m, n] matrix X
+        var x = new NDArray<T>(m, n);
+        for (int col = 0; col < n; col++)
+        {
+            for (int row = 0; row < m; row++)
+            {
+                x[row, col] = vecX[col * m + row, 0];
+            }
+        }
+
+        return x;
+    }
 }

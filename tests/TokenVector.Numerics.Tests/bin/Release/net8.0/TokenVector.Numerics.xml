@@ -705,6 +705,23 @@
             Computes trace (sum of diagonal elements) of a 2D matrix.
             </summary>
         </member>
+        <member name="M:TokenVector.Numerics.LinAlg.Decomposition.Schur``1(TokenVector.Numerics.Core.NDArray{``0},System.Int32)">
+            <summary>
+            Computes the Real Schur Decomposition of a square matrix A = Q * T * Q^T.
+            Q is an orthogonal matrix and T is quasi-upper triangular.
+            </summary>
+            <returns>(Q: Orthogonal matrix, T: Quasi-triangular Schur matrix)</returns>
+        </member>
+        <member name="M:TokenVector.Numerics.LinAlg.Decomposition.SolveSylvester``1(TokenVector.Numerics.Core.NDArray{``0},TokenVector.Numerics.Core.NDArray{``0},TokenVector.Numerics.Core.NDArray{``0})">
+            <summary>
+            Solves the Sylvester equation: A * X + X * B = C.
+            Uses vectorized Kronecker transformation: (I_n (x) A + B^T (x) I_m) * vec(X) = vec(C).
+            </summary>
+            <param name="a">Matrix A of shape [m, m]</param>
+            <param name="b">Matrix B of shape [n, n]</param>
+            <param name="c">Matrix C of shape [m, n]</param>
+            <returns>Solution matrix X of shape [m, n]</returns>
+        </member>
         <member name="T:TokenVector.Numerics.LinAlg.Eigen">
             <summary>
             Spectral theory engine computing Eigenvalues and Eigenvectors (Eigh for symmetric matrices and Eig for general matrices).
@@ -959,6 +976,30 @@
             Computes the Bartlett triangular window.
             </summary>
         </member>
+        <member name="M:TokenVector.Numerics.LinAlg.SignalProcessing.DWT(TokenVector.Numerics.Core.NDArray{System.Double},System.String)">
+            <summary>
+            Computes 1D Single-level Discrete Wavelet Transform (DWT).
+            Returns (cA: Approximation coefficients, cD: Detail coefficients).
+            Supported wavelets: "haar" (default), "db4".
+            </summary>
+        </member>
+        <member name="M:TokenVector.Numerics.LinAlg.SignalProcessing.IDWT(TokenVector.Numerics.Core.NDArray{System.Double},TokenVector.Numerics.Core.NDArray{System.Double},System.String)">
+            <summary>
+            Computes 1D Inverse Discrete Wavelet Transform (IDWT) reconstructing signal from cA and cD.
+            Supported wavelets: "haar" (default), "db4".
+            </summary>
+        </member>
+        <member name="M:TokenVector.Numerics.LinAlg.SignalProcessing.Hilbert(TokenVector.Numerics.Core.NDArray{System.Double})">
+            <summary>
+            Computes the Hilbert transform H[x] of a 1D real signal using FFT.
+            </summary>
+        </member>
+        <member name="M:TokenVector.Numerics.LinAlg.SignalProcessing.AnalyticSignal(TokenVector.Numerics.Core.NDArray{System.Double})">
+            <summary>
+            Computes the Analytic Signal x_a(t) = x(t) + i * H[x(t)] using FFT.
+            Returns (Real: original signal, Imag: Hilbert transform).
+            </summary>
+        </member>
         <member name="T:TokenVector.Numerics.LinAlg.SpecialFunctions">
             <summary>
             Provides advanced mathematical and scientific special functions (Erf, Erfc, Gamma, LogGamma, BesselI0, BesselJ0) matching scipy.special / PyTorch Special.
@@ -992,6 +1033,32 @@
         <member name="M:TokenVector.Numerics.LinAlg.SpecialFunctions.BesselJ0``1(TokenVector.Numerics.Core.NDArray{``0})">
             <summary>
             Computes the Bessel function of the first kind of order 0: J_0(x).
+            </summary>
+        </member>
+        <member name="M:TokenVector.Numerics.LinAlg.SpecialFunctions.BesselY0``1(TokenVector.Numerics.Core.NDArray{``0})">
+            <summary>
+            Computes the Bessel function of the second kind of order 0: Y_0(x) (Neumann function).
+            </summary>
+        </member>
+        <member name="M:TokenVector.Numerics.LinAlg.SpecialFunctions.BesselK0``1(TokenVector.Numerics.Core.NDArray{``0})">
+            <summary>
+            Computes the Modified Bessel function of the second kind of order 0: K_0(x).
+            </summary>
+        </member>
+        <member name="M:TokenVector.Numerics.LinAlg.SpecialFunctions.LambertW``1(TokenVector.Numerics.Core.NDArray{``0},System.Int32)">
+            <summary>
+            Computes the Lambert W function W_k(x) where W(x) * exp(W(x)) = x via Halley's 3rd order iteration.
+            Supports principal branch k=0 (for x >= -1/e) and branch k=-1 (for -1/e &lt;= x &lt; 0).
+            </summary>
+        </member>
+        <member name="M:TokenVector.Numerics.LinAlg.SpecialFunctions.AiryAi``1(TokenVector.Numerics.Core.NDArray{``0})">
+            <summary>
+            Computes the Airy function of the first kind: Ai(x).
+            </summary>
+        </member>
+        <member name="M:TokenVector.Numerics.LinAlg.SpecialFunctions.AiryBi``1(TokenVector.Numerics.Core.NDArray{``0})">
+            <summary>
+            Computes the Airy function of the second kind: Bi(x).
             </summary>
         </member>
         <member name="T:TokenVector.Numerics.LinAlg.SVD">
@@ -1502,6 +1569,14 @@
             Returns optimal x and optimal objective value.
             </summary>
         </member>
+        <member name="M:TokenVector.Numerics.Optimize.OptimizationAndRootFinding.QPSolve(TokenVector.Numerics.Core.NDArray{System.Double},TokenVector.Numerics.Core.NDArray{System.Double},TokenVector.Numerics.Core.NDArray{System.Double},TokenVector.Numerics.Core.NDArray{System.Double},TokenVector.Numerics.Core.NDArray{System.Double},TokenVector.Numerics.Core.NDArray{System.Double},TokenVector.Numerics.Core.NDArray{System.Double},TokenVector.Numerics.Core.NDArray{System.Double},System.Double,System.Double,System.Double,System.Int32)">
+            <summary>
+            Solves Convex Quadratic Program:
+            Minimize (1/2) * x^T * P * x + q^T * x
+            Subject to: G * x &lt;= h (inequality), A * x == b (equality), lb &lt;= x &lt;= ub (box bounds).
+            Uses Operator-Splitting ADMM (Alternating Direction Method of Multipliers) matching OSQP standard.
+            </summary>
+        </member>
         <member name="T:TokenVector.Numerics.Physics.LatticeBoltzmann2D">
             <summary>
             Provides 2D Lattice Boltzmann Method (LBM D2Q9) incompressible fluid dynamics simulation.
@@ -1528,6 +1603,13 @@
             <summary>
             Integrates a system of ordinary differential equations dy/dt = f(t, y) from t0 to tEnd using classical Runge-Kutta 4th order (RK4).
             Returns an array of state vectors at each time step.
+            </summary>
+        </member>
+        <member name="M:TokenVector.Numerics.Physics.PhysicsODEAndFields.SolveSymplecticVerlet(System.Func{TokenVector.Numerics.Core.NDArray{System.Double},TokenVector.Numerics.Core.NDArray{System.Double}},System.Double,System.Double,TokenVector.Numerics.Core.NDArray{System.Double},TokenVector.Numerics.Core.NDArray{System.Double},System.Double,System.Int32)">
+            <summary>
+            Integrates a general Hamiltonian dynamical system H(q, p) = (1/2m) p^T p + V(q) with force F(q) = -\nabla V(q)
+            using the energy-preserving symplectic Leapfrog / Velocity-Verlet method from t0 to tEnd.
+            Preserves phase-space symplectic 2-form and total energy with zero secular drift.
             </summary>
         </member>
         <member name="M:TokenVector.Numerics.Physics.PhysicsODEAndFields.NBodyVerletStep(TokenVector.Numerics.Core.NDArray{System.Double},TokenVector.Numerics.Core.NDArray{System.Double},TokenVector.Numerics.Core.NDArray{System.Double},System.Double,System.Double,System.Double)">

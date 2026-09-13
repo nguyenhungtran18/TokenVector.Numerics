@@ -11,3 +11,8 @@ d:\TokenVector Numerics\src\TokenVector.Numerics\obj\Release\net8.0\refint\Token
 d:\TokenVector Numerics\src\TokenVector.Numerics\obj\Release\net8.0\TokenVector.Numerics.xml
 d:\TokenVector Numerics\src\TokenVector.Numerics\obj\Release\net8.0\TokenVector.Numerics.pdb
 d:\TokenVector Numerics\src\TokenVector.Numerics\obj\Release\net8.0\ref\TokenVector.Numerics.dll
+D:\TokenVector Numerics\src\TokenVector.Numerics\obj\Release\net8.0\TokenVector.Numerics.sourcelink.json
+D:\TokenVector Numerics\src\TokenVector.Numerics\dist\bin\TokenVector.Numerics.deps.json
+D:\TokenVector Numerics\src\TokenVector.Numerics\dist\bin\TokenVector.Numerics.dll
+D:\TokenVector Numerics\src\TokenVector.Numerics\dist\bin\TokenVector.Numerics.pdb
+D:\TokenVector Numerics\src\TokenVector.Numerics\dist\bin\TokenVector.Numerics.xml

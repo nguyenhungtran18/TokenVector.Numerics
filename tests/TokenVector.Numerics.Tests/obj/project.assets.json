@@ -1709,7 +1709,7 @@
           "build/net6.0/xunit.runner.visualstudio.props": {}
         }
       },
-      "TokenVector.Numerics/1.0.0": {
+      "TokenVector.Numerics/1.0.1": {
         "type": "project",
         "framework": ".NETCoreApp,Version=v8.0",
         "compile": {
@@ -5508,7 +5508,7 @@
         "xunit.runner.visualstudio.nuspec"
       ]
     },
-    "TokenVector.Numerics/1.0.0": {
+    "TokenVector.Numerics/1.0.1": {
       "type": "project",
       "path": "../../src/TokenVector.Numerics/TokenVector.Numerics.csproj",
       "msbuildProject": "../../src/TokenVector.Numerics/TokenVector.Numerics.csproj"
@@ -5517,7 +5517,7 @@
   "projectFileDependencyGroups": {
     "net8.0": [
       "Microsoft.NET.Test.Sdk >= 17.8.0",
-      "TokenVector.Numerics >= 1.0.0",
+      "TokenVector.Numerics >= 1.0.1",
       "coverlet.collector >= 6.0.0",
       "xunit >= 2.5.3",
       "xunit.runner.visualstudio >= 2.5.3"
