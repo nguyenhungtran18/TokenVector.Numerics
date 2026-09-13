@@ -3,15 +3,16 @@
 
 [ 🇬🇧 English ](TEST_REPORT.md) | [ 🇻🇳 Tiếng Việt ](TEST_REPORT_VI.md)
 
-**Mã báo cáo:** TR-TKV-NUMERICS-2026-FINAL-V6 (GRAND UNIFIED & AUTOGRAD EDITION)  
-**Ngày thực hiện:** 12/09/2026  
-**Môi trường thử nghiệm:** .NET SDK 8.0.425, Release Configuration, x64 Architecture, Windows OS  
+**Mã báo cáo:** TR-TKV-NUMERICS-2026-V1.0.1-FINAL (MATHEMATICAL EXPANSION & QP EDITION)  
+**Ngày thực hiện:** 13/09/2026  
+**Phiên bản mục tiêu:** `v1.0.1`  
+**Môi trường thử nghiệm:** .NET SDK 8.0 LTS, Release Configuration, x64 Architecture, Windows OS  
 **Khung kiểm thử:** xUnit.net v2.5.3, Microsoft.NET.Test.Sdk v17.8.0  
-**Trạng thái kiểm thử:** **100% PASSED (75/75 Tests in 146 ms)**  
+**Trạng thái kiểm thử:** **100% PASSED (84/84 Tests in ~143 ms)**  
 
 ---
 
-## 1. MA TRẬN CHI TIẾT TOÀN BỘ 75 CA KIỂM THỬ
+## 1. MA TRẬN CHI TIẾT TOÀN BỘ 84 CA KIỂM THỬ
 
 | ID | Nhóm | Tên Test Method | Mô Tả Mục Tiêu Kỹ Thuật | Kết Quả | Thời Gian |
 | :---: | :--- | :--- | :--- | :---: | :---: |
@@ -90,6 +91,15 @@
 | **73** | `Autograd`| `Test_ActivationFunctions_Autograd` | Đạo hàm các hàm kích hoạt ReLU, Sigmoid, Tanh | **PASS** | 2 ms |
 | **74** | `Autograd`| `Test_LossFunctions_Autograd` | Tính MSE Loss và kiểm tra gradient $\frac{2}{N}(y_{pred}-y_{true})$ | **PASS** | 1 ms |
 | **75** | `Autograd`| `Test_EndToEnd_XOR_NeuralNetwork` | Huấn luyện mạng nơ-ron MLP giải XOR với AdamW (Loss < 0.04) | **PASS** | 8 ms |
+| **76** | `SuperLib` | `TestLambertW_Branches` | Hàm Lambert W $W_0(x)$ và $W_{-1}(x)$ số thực & tensor | **PASS** | 2 ms |
+| **77** | `SuperLib` | `TestBesselAndAiryFunctions` | Bessel $Y_0(x), K_0(x)$ và hàm Airy $\text{Ai}(x), \text{Bi}(x)$ | **PASS** | 2 ms |
+| **78** | `LinAlg` | `TestSchurDecomposition` | Phân rã Schur thực $A = Q T Q^T$ với ma trận trực giao $Q$ | **PASS** | 3 ms |
+| **79** | `LinAlg` | `TestSolveSylvester` | Giải phương trình ma trận Sylvester $A X + X B = C$ | **PASS** | 3 ms |
+| **80** | `Signal` | `TestWaveletTransform_Haar_Reconstruction` | Biến đổi Wavelet DWT/IDWT Haar phục hồi tín hiệu 100% | **PASS** | 2 ms |
+| **81** | `Signal` | `TestHilbertTransform` | Biến đổi Hilbert 1D và tín hiệu giải tích qua FFT | **PASS** | 3 ms |
+| **82** | `Optimize` | `TestQPSolve_EqualityConstrained` | Giải quy hoạch toàn phương ADMM có ràng buộc đẳng thức | **PASS** | 4 ms |
+| **83** | `Optimize` | `TestQPSolve_BoxBounded` | Giải quy hoạch toàn phương ADMM có ràng buộc khoảng $[lb, ub]$ | **PASS** | 4 ms |
+| **84** | `Physics` | `TestSymplecticVerlet_EnergyConservation` | Tích phân Symplectic Leapfrog bảo toàn tuyệt đối năng lượng | **PASS** | 5 ms |
 
 ---
 
@@ -101,6 +111,8 @@ Command: dotnet test "TokenVector.Numerics.sln" -c Release
   Determining projects to restore...
   All projects are up-to-date for restore.
   TokenVector.Numerics -> d:\TokenVector Numerics\src\TokenVector.Numerics\bin\Release\net8.0\TokenVector.Numerics.dll
+  Successfully created package 'd:\TokenVector Numerics\src\TokenVector.Numerics\bin\Release\TokenVector.Numerics.1.0.1.nupkg'.
+  Successfully created package 'd:\TokenVector Numerics\src\TokenVector.Numerics\bin\Release\TokenVector.Numerics.1.0.1.snupkg'.
   TokenVector.Numerics.Tests -> d:\TokenVector Numerics\tests\TokenVector.Numerics.Tests\bin\Release\net8.0\TokenVector.Numerics.Tests.dll
 Test run for d:\TokenVector Numerics\tests\TokenVector.Numerics.Tests\bin\Release\net8.0\TokenVector.Numerics.Tests.dll (.NETCoreApp,Version=v8.0)
 VSTest version 17.11.1 (x64)
@@ -108,5 +120,5 @@ VSTest version 17.11.1 (x64)
 Starting test execution, please wait...
 A total of 1 test files matched the specified pattern.
 
-Passed!  - Failed:     0, Passed:    75, Skipped:     0, Total:    75, Duration: 146 ms - TokenVector.Numerics.Tests.dll (net8.0)
+Passed!  - Failed:     0, Passed:    84, Skipped:     0, Total:    84, Duration: 143 ms - TokenVector.Numerics.Tests.dll (net8.0)
 ```

@@ -3,15 +3,16 @@
 
 [ 🇬🇧 English ](TEST_REPORT.md) | [ 🇻🇳 Tiếng Việt ](TEST_REPORT_VI.md)
 
-**Report ID:** TR-TKV-NUMERICS-2026-FINAL-V6 (GRAND UNIFIED & AUTOGRAD EDITION)  
-**Execution Date:** September 12, 2026  
-**Test Environment:** .NET SDK 8.0.425, Release Configuration, x64 Architecture, Windows OS  
+**Report ID:** TR-TKV-NUMERICS-2026-V1.0.1-FINAL (MATHEMATICAL EXPANSION & QP EDITION)  
+**Execution Date:** September 13, 2026  
+**Target Version:** `v1.0.1`  
+**Test Environment:** .NET SDK 8.0 LTS, Release Configuration, x64 Architecture, Windows OS  
 **Test Framework:** xUnit.net v2.5.3, Microsoft.NET.Test.Sdk v17.8.0  
-**Status:** **100% PASSED (75/75 Tests in 146 ms)**  
+**Status:** **100% PASSED (84/84 Tests in ~143 ms)**  
 
 ---
 
-## 1. COMPREHENSIVE 75-TEST MATRIX
+## 1. COMPREHENSIVE 84-TEST MATRIX
 
 | ID | Suite | Test Method | Technical Objective | Status | Time |
 | :---: | :--- | :--- | :--- | :---: | :---: |
@@ -90,6 +91,15 @@
 | **73** | `Autograd`| `Test_ActivationFunctions_Autograd` | Activation gradients: ReLU, Sigmoid, Tanh | **PASS** | 2 ms |
 | **74** | `Autograd`| `Test_LossFunctions_Autograd` | MSE Loss gradient verification $\frac{2}{N}(y_{pred}-y_{true})$ | **PASS** | 1 ms |
 | **75** | `Autograd`| `Test_EndToEnd_XOR_NeuralNetwork` | 2-layer MLP XOR classification with AdamW (Loss < 0.04) | **PASS** | 8 ms |
+| **76** | `SuperLib` | `TestLambertW_Branches` | Lambert W function $W_0(x)$ & $W_{-1}(x)$ scalar & tensor | **PASS** | 2 ms |
+| **77** | `SuperLib` | `TestBesselAndAiryFunctions` | Bessel $Y_0(x), K_0(x)$ and Airy $\text{Ai}(x), \text{Bi}(x)$ | **PASS** | 2 ms |
+| **78** | `LinAlg` | `TestSchurDecomposition` | Real Schur $A = Q T Q^T$ with orthogonal $Q$ | **PASS** | 3 ms |
+| **79** | `LinAlg` | `TestSolveSylvester` | Continuous Sylvester matrix equation $A X + X B = C$ | **PASS** | 3 ms |
+| **80** | `Signal` | `TestWaveletTransform_Haar_Reconstruction` | Discrete Wavelet Transform DWT/IDWT Haar perfect recovery | **PASS** | 2 ms |
+| **81** | `Signal` | `TestHilbertTransform` | 1D Hilbert transform and Analytic Signal via FFT | **PASS** | 3 ms |
+| **82** | `Optimize` | `TestQPSolve_EqualityConstrained` | ADMM Quadratic Programming with equality constraints | **PASS** | 4 ms |
+| **83** | `Optimize` | `TestQPSolve_BoxBounded` | ADMM Quadratic Programming with box bounds $[lb, ub]$ | **PASS** | 4 ms |
+| **84** | `Physics` | `TestSymplecticVerlet_EnergyConservation` | Symplectic Leapfrog/Verlet integrator energy conservation | **PASS** | 5 ms |
 
 ---
 
@@ -101,6 +111,8 @@ Command: dotnet test "TokenVector.Numerics.sln" -c Release
   Determining projects to restore...
   All projects are up-to-date for restore.
   TokenVector.Numerics -> d:\TokenVector Numerics\src\TokenVector.Numerics\bin\Release\net8.0\TokenVector.Numerics.dll
+  Successfully created package 'd:\TokenVector Numerics\src\TokenVector.Numerics\bin\Release\TokenVector.Numerics.1.0.1.nupkg'.
+  Successfully created package 'd:\TokenVector Numerics\src\TokenVector.Numerics\bin\Release\TokenVector.Numerics.1.0.1.snupkg'.
   TokenVector.Numerics.Tests -> d:\TokenVector Numerics\tests\TokenVector.Numerics.Tests\bin\Release\net8.0\TokenVector.Numerics.Tests.dll
 Test run for d:\TokenVector Numerics\tests\TokenVector.Numerics.Tests\bin\Release\net8.0\TokenVector.Numerics.Tests.dll (.NETCoreApp,Version=v8.0)
 VSTest version 17.11.1 (x64)
@@ -108,5 +120,5 @@ VSTest version 17.11.1 (x64)
 Starting test execution, please wait...
 A total of 1 test files matched the specified pattern.
 
-Passed!  - Failed:     0, Passed:    75, Skipped:     0, Total:    75, Duration: 146 ms - TokenVector.Numerics.Tests.dll (net8.0)
+Passed!  - Failed:     0, Passed:    84, Skipped:     0, Total:    84, Duration: 143 ms - TokenVector.Numerics.Tests.dll (net8.0)
 ```
