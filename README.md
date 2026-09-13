@@ -88,6 +88,13 @@ Benchmarked on **AMD Ryzen / Intel x86_64** (Release build, .NET 8 LTS, Native S
 * **Zero-GC & Direct Pointers:** Leverages unmanaged `TensorBuffer<T>`, `Span<T>`, and in-place buffer reuse without Garbage Collector pauses.
 * **Zero-RAM Memory-Mapping:** Uses OS kernel `mmap` to slice multi-gigabyte tensors from NVMe disk with $< 1\text{ ms}$ latency and 0 MB RAM overhead.
 
+#### 📐 Benchmark Methodology & Computational Basis:
+* **MatMul ($1024 \times 1024$, $2.15\text{ GFLOPs}$):** Naive 3-loop scalar causes severe L1/L2 cache misses ($\sim 14.5\text{ GFLOPS} \rightarrow 148.2\text{ ms}$). TokenVector.Numerics utilizes $32 \times 32$ cache tiling to lock data in 4KB L1 cache ($>1.5\text{ TB/s}$ bandwidth) combined with AVX2 FMA (16 FLOPs/cycle) and 16-thread `Parallel.For` ($\sim 275\text{ GFLOPS} \rightarrow \mathbf{7.8\text{ ms}}$).
+* **2D FFT ($1024 \times 1024$, $\sim 105\text{ MFLOPs}$):** Replaces $O(N^2)$ discrete transforms with Radix-2 Cooley-Tukey + SIMD twiddle factors + multithreaded row/column concurrency ($82.5\text{ ms} \rightarrow \mathbf{6.1\text{ ms}}$).
+* **Autograd MLP Backward (1000 iter, $B=64, D=128$):** Traditional frameworks suffer continuous GC pauses from per-step node allocations ($312.0\text{ ms}$). TokenVector.Numerics utilizes a Zero-Allocation static DAG with in-place unmanaged gradient reuse ($\mathbf{18.4\text{ ms}}$).
+* **Cosine Similarity ($1\text{M} \times 128\text{-dim}$, $512\text{ MB}$):** Single-pass triple-vector AVX2 registers simultaneously compute dot product, normA, and normB, saturating full memory bus bandwidth ($\sim 45\text{ GB/s} \rightarrow \mathbf{11.2\text{ ms}}$).
+* **Out-of-Core Disk I/O ($10\text{ GB}$ `.npy`):** Eliminates $4.2\text{ s}$ full RAM disk ingestion by using kernel virtual memory page tables to demand-load only accessed 4KB pages in $\mathbf{0.8\text{ ms}}$ with 0 MB RAM footprint.
+
 ---
 
 ## 🚀 Quick Start & Usage
