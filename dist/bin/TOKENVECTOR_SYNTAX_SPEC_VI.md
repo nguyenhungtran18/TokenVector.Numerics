@@ -12,7 +12,7 @@
 
 Trong TokenVector, tiền tố gốc bản địa duy nhất là **`tv`** (hoặc tên đầy đủ **`tokenvector`**):
 
-```python
+```tokenvector
 # 1. Nhập module cốt lõi
 import tv
 
@@ -26,7 +26,7 @@ from tv import science, finance, physics, quantum, spatial
 
 ## 2. Cú pháp Mảng Đa Chiều & Bộ Nhớ (NDArray & Memory)
 
-```python
+```tokenvector
 # Khởi tạo mảng n-chiều
 a = tv.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], shape=[2, 3])
 b = tv.zeros([4, 4])
@@ -47,7 +47,7 @@ with tv.allocate_native([1024, 1024], dtype=tv.f32) as native_buf:
 
 ## 3. Cú pháp Đại Số Tuyến Tính & Ma Trận (`tv.linalg`)
 
-```python
+```tokenvector
 import tv.linalg as la
 
 A = tv.array([[4.0, 1.0], [1.0, 3.0]])
@@ -76,7 +76,7 @@ sqrtA = la.sqrtm(A)
 
 ## 4. Cú pháp Tự Động Vi Phân & Deep Learning (`tv.autograd` & `tv.nn`)
 
-```python
+```tokenvector
 from tv import tensor
 import tv.nn as nn
 import tv.optim as optim
@@ -121,7 +121,7 @@ for epoch in range(100):
 ## 5. Cú pháp Toán Học Đa Ngành Chuyên Sâu
 
 ### A. Cơ Học Không Gian & Thiên Văn (`tv.astro`)
-```python
+```tokenvector
 import tv.astro as astro
 
 # Giải Kepler và chuyển đổi quỹ đạo
@@ -131,7 +131,7 @@ dv1, dv2, total_dv, tof = astro.hohmann_transfer(r_leo=6678.0, r_geo=42164.0)
 ```
 
 ### B. Toán Tài Chính Định Lượng (`tv.finance`)
-```python
+```tokenvector
 import tv.finance as fin
 
 # Định giá quyền chọn Black-Scholes & The Greeks
@@ -141,7 +141,7 @@ sharpe = fin.sharpe_ratio(weights, returns, cov_matrix, risk_free_rate=0.02)
 ```
 
 ### C. Vật Lý Tính Toán & LBM CFD (`tv.physics`)
-```python
+```tokenvector
 import tv.physics as phys
 
 # Tích phân vi phân Runge-Kutta 4 & Thủy động lực học Navier-Stokes LBM
@@ -150,7 +150,7 @@ lbm_step = phys.lattice_boltzmann_2d(density, velocity, tau=0.6)
 ```
 
 ### D. Điện Toán Lượng Tử (`tv.quantum`)
-```python
+```tokenvector
 import tv.quantum as qtm
 
 # Trạng thái Bell lượng tử và mạch QFT

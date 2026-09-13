@@ -5,9 +5,9 @@
 [![.NET 8](https://img.shields.io/badge/.NET-8.0%20LTS-purple.svg)](https://dotnet.microsoft.com/)
 [![C# 12](https://img.shields.io/badge/C%23-12.0-blue.svg)](https://learn.microsoft.com/dotnet/csharp/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/Tests-75%2F75%20Passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-84%2F84%20Passed-brightgreen.svg)]()
 
-**`TokenVector.Numerics.dll`** là thư viện toán học số học, tensor đa chiều, tự động vi phân (Autograd Engine), đại số giải tích, tối ưu hóa, nội suy spline, vật lý tính toán, tài chính định lượng, cơ học thiên văn vũ trụ, điện toán lượng tử, mật mã hậu lượng tử và hình học phi Euclid hiệu năng cao cho hệ sinh thái và trình biên dịch của **TokenVector** (ngôn ngữ lập trình typed Python-like biên dịch trực tiếp sang .NET CIL AOT).
+**`TokenVector.Numerics.dll`** là thư viện toán học số học, tensor đa chiều, tự động vi phân (Autograd Engine), đại số giải tích, tối ưu hóa, nội suy spline, vật lý tính toán, tài chính định lượng, cơ học thiên văn vũ trụ, điện toán lượng tử, mật mã hậu lượng tử và hình học phi Euclid hiệu năng cao cho hệ sinh thái và trình biên dịch của **TokenVector** (ngôn ngữ lập trình kiểu tĩnh bản địa biên dịch trực tiếp sang .NET CIL AOT).
 
 Thư viện đóng vai trò là **Runtime Math & Tensor Engine Đa Ngành Toàn Năng**, bao trùm toàn diện các lĩnh vực tính toán: tensor đa chiều, tự động vi phân (Autograd), đại số tuyến tính & ma trận giải tích, tối ưu hóa phi tuyến, nội suy spline, phân phối & kiểm định thống kê, xử lý tín hiệu DSP & FFT, cơ học thiên văn vũ trụ, tài chính định lượng, chuỗi thời gian & bộ lọc Kalman, vật lý tính toán, hạt nhân AI/Transformer, điện toán lượng tử, mật mã lattice, sinh học cấu trúc, đồ thị phổ học GNN, thủy động lực học LBM CFD, điều khiển tối ưu robot và hình học hyperbolic phi Euclid.
 

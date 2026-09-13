@@ -5,9 +5,9 @@
 [![.NET 8](https://img.shields.io/badge/.NET-8.0%20LTS-purple.svg)](https://dotnet.microsoft.com/)
 [![C# 12](https://img.shields.io/badge/C%23-12.0-blue.svg)](https://learn.microsoft.com/dotnet/csharp/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/Tests-75%2F75%20Passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-84%2F84%20Passed-brightgreen.svg)]()
 
-**`TokenVector.Numerics.dll`** is a high-performance, standalone mathematical library for multidimensional tensors, Automatic Differentiation (Autograd Engine), analytical linear algebra, optimization, spline interpolation, computational physics, quantitative finance, astrodynamics, quantum computing, post-quantum cryptography, and non-Euclidean geometry built for the **TokenVector** ecosystem and compiler (a typed Python-like language natively compiling to .NET CIL AOT).
+**`TokenVector.Numerics.dll`** is a high-performance, standalone mathematical library for multidimensional tensors, Automatic Differentiation (Autograd Engine), analytical linear algebra, optimization, spline interpolation, computational physics, quantitative finance, astrodynamics, quantum computing, post-quantum cryptography, and non-Euclidean geometry built for the **TokenVector** ecosystem and compiler (a statically-typed native language compiling directly to .NET CIL AOT).
 
 The library serves as the **Grand Unified Runtime Math & Tensor Engine**, covering multidimensional tensors, automatic differentiation (Autograd), linear algebra, matrix functions, nonlinear optimization, splines, statistical distributions & hypothesis tests, DSP & FFT signal processing, astrodynamics, quantitative finance, computational physics, quantum state simulation, lattice cryptography, structural biology, spectral graph neural networks, and hyperbolic geometry.
 

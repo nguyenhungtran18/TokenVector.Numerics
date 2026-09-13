@@ -11,7 +11,7 @@
 
 In TokenVector, the sole native top-level prefix is **`tv`** (or the full module name **`tokenvector`**):
 
-```python
+```tokenvector
 # 1. Import core module
 import tv
 
@@ -25,7 +25,7 @@ from tv import science, finance, physics, quantum, spatial
 
 ## 2. Multidimensional Arrays & Memory Allocation (NDArray)
 
-```python
+```tokenvector
 # Create multidimensional arrays
 a = tv.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], shape=[2, 3])
 b = tv.zeros([4, 4])
@@ -46,7 +46,7 @@ with tv.allocate_native([1024, 1024], dtype=tv.f32) as native_buf:
 
 ## 3. Linear Algebra & Matrix Computing (`tv.linalg`)
 
-```python
+```tokenvector
 import tv.linalg as la
 
 A = tv.array([[4.0, 1.0], [1.0, 3.0]])
@@ -75,7 +75,7 @@ sqrtA = la.sqrtm(A)
 
 ## 4. Automatic Differentiation & Deep Learning (`tv.autograd` & `tv.nn`)
 
-```python
+```tokenvector
 from tv import tensor
 import tv.nn as nn
 import tv.optim as optim
@@ -120,7 +120,7 @@ for epoch in range(100):
 ## 5. Domain-Specific Mathematics Modules
 
 ### A. Astrodynamics & Space Mechanics (`tv.astro`)
-```python
+```tokenvector
 import tv.astro as astro
 
 # Solve Kepler's equation and orbit propagation
@@ -130,7 +130,7 @@ dv1, dv2, total_dv, tof = astro.hohmann_transfer(r_leo=6678.0, r_geo=42164.0)
 ```
 
 ### B. Quantitative Finance (`tv.finance`)
-```python
+```tokenvector
 import tv.finance as fin
 
 # Black-Scholes-Merton option pricing & Greeks
@@ -140,7 +140,7 @@ sharpe = fin.sharpe_ratio(weights, returns, cov_matrix, risk_free_rate=0.02)
 ```
 
 ### C. Computational Physics & LBM Fluid Dynamics (`tv.physics`)
-```python
+```tokenvector
 import tv.physics as phys
 
 # 4th-order Runge-Kutta ODE integration & LBM D2Q9 Navier-Stokes
@@ -149,7 +149,7 @@ lbm_step = phys.lattice_boltzmann_2d(density, velocity, tau=0.6)
 ```
 
 ### D. Quantum Computing (`tv.quantum`)
-```python
+```tokenvector
 import tv.quantum as qtm
 
 # Quantum Bell state simulation and circuit QFT
