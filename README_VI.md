@@ -96,3 +96,56 @@ Passed!  - Failed: 0, Passed: 84, Skipped: 0, Total: 84, Duration: 143 ms - Toke
 * **I/O Đĩa Ánh Xạ Out-of-Core ($10\text{ GB}$ $.npy$):** Loại bỏ việc nạp cả 10GB vào RAM mất $4.2\text{ s}$; thay vào đó kernel OS chỉ ánh xạ bảng trang ảo và nạp đúng 1 trang nhớ $4\text{ KB}$ khi truy cập, trả kết quả trong $\mathbf{0.8\text{ ms}}$ với 0 MB RAM chiếm dụng.
 
 ---
+
+## 🚀 Bắt Đầu Nhanh & Mẫu Sử Dụng
+
+```csharp
+using TokenVector.Numerics.Core;
+using TokenVector.Numerics.Autograd;
+using TokenVector.Numerics.Autograd.NN;
+using TokenVector.Numerics.Autograd.Optim;
+
+// 1. Slicing mảng đa chiều Zero-copy & Broadcasting
+var a = NDArray<double>.FromArray([1, 2, 3, 4, 5, 6], 2, 3);
+var b = NDArray<double>.FromArray([10, 20, 30], 1, 3);
+var c = a + b; // Stride-0 Broadcasting -> [2, 3]
+
+// 2. Tự động vi phân trên đồ thị động (Autograd)
+var x = new Tensor<double>(3.0, requiresGrad: true);
+var y = (x * x) + (2.0 * x) + 1.0;
+y.Backward();
+Console.WriteLine(x.Grad!.Buffer[0]); // dy/dx = 2*3 + 2 = 8.0
+
+// 3. Huấn luyện mạng nơ-ron Perceptron đa tầng (MLP)
+var model = new Sequential<double>(
+    new Linear<double>(inFeatures: 2, outFeatures: 8),
+    new Linear<double>(inFeatures: 8, outFeatures: 1)
+);
+var optimizer = new AdamW<double>(model.Parameters(), lr: 0.05);
+```
+
+---
+
+## 🛠️ Biên Dịch Với Ngôn Ngữ TokenVector (`tkvc.exe`)
+
+Để biên dịch ứng dụng viết bằng ngôn ngữ TokenVector (`.tkv` / `.tv`) liên kết với thư viện `TokenVector.Numerics.dll`:
+
+1. **Clone repository chính thức của TokenVector** để lấy trình biên dịch `tkvc.exe` và thư viện chuẩn (`stdlib`):
+   ```powershell
+   git clone https://github.com/nguyenhungtran18/TokenVector.git
+   ```
+2. **Biên dịch chương trình TokenVector** thành file thực thi `.exe` độc lập:
+   ```powershell
+   ./tkvc.exe main.tkv -r TokenVector.Numerics.dll -o app.exe
+   ```
+3. **Chạy ứng dụng native trực tiếp**:
+   ```powershell
+   ./app.exe
+   ```
+
+---
+
+Để xem toàn bộ tài liệu chi tiết 34 chuyên ngành toán học và cú pháp ngữ pháp ngôn ngữ, tham khảo:
+* 📖 [User Guide (English)](USER_GUIDE.md) | [Sổ tay hướng dẫn sử dụng (Tiếng Việt)](USER_GUIDE_VI.md)
+* 📐 [TokenVector Syntax Specification](TOKENVECTOR_SYNTAX_SPEC.md) | [Đặc tả cú pháp TokenVector](TOKENVECTOR_SYNTAX_SPEC_VI.md)
+* 🏛️ [Repository Trình Biên Dịch TokenVector Chính Thức](https://github.com/nguyenhungtran18/TokenVector)

@@ -174,3 +174,25 @@ entropy = state.von_neumann_entropy()
 | `optim.AdamW(params, lr=0.01)` | `new AdamW<double>(params, lr: 0.01)` |
 | `nn.Linear(2, 8)` | `new Linear<double>(2, 8)` |
 | `with tv.allocate_native(...) as buf:` | `using var buf = NDArray.AllocateNative(...)` |
+
+---
+
+## 7. Trình Biên Dịch & Biên Dịch Ứng Dụng với `tkvc.exe`
+
+### 1. Tải Trình Biên Dịch & Clone Kho Thư Viện
+Để tải trình biên dịch độc lập **`tkvc.exe`**, thư viện chuẩn (`stdlib`) và công cụ ngôn ngữ, hãy truy cập hoặc clone repository chính thức:
+```powershell
+# Clone repository chính thức của TokenVector Compiler & Thư viện
+git clone https://github.com/nguyenhungtran18/TokenVector.git
+```
+
+### 2. Biên Dịch Mã Nguồn TokenVector
+Sử dụng trình biên dịch **`tkvc.exe`** để biên dịch trực tiếp các file mã nguồn (`.tkv` hoặc `.tv`) có liên kết thư viện `TokenVector.Numerics.dll` thành file thực thi PE nhị phân độc lập:
+```powershell
+# Biên dịch file mã nguồn sang file thực thi .exe độc lập
+./tkvc.exe main.tkv -r TokenVector.Numerics.dll -o app.exe
+
+# Chạy ứng dụng native trực tiếp
+./app.exe
+```
+

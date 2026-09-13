@@ -124,4 +124,28 @@ var model = new Sequential<double>(
 var optimizer = new AdamW<double>(model.Parameters(), lr: 0.05);
 ```
 
-For comprehensive documentation across all 34 mathematical categories, please check the [User Guide (English)](USER_GUIDE.md) or [Hướng dẫn sử dụng (Tiếng Việt)](USER_GUIDE_VI.md).
+---
+
+## 🛠️ Compiling with TokenVector Language (`tkvc.exe`)
+
+To compile native TokenVector (`.tkv` / `.tv`) programs using `TokenVector.Numerics.dll`:
+
+1. **Clone the official TokenVector repository** to obtain `tkvc.exe` and standard libraries (`stdlib`):
+   ```powershell
+   git clone https://github.com/nguyenhungtran18/TokenVector.git
+   ```
+2. **Compile your TokenVector program** into a standalone native executable:
+   ```powershell
+   ./tkvc.exe main.tkv -r TokenVector.Numerics.dll -o app.exe
+   ```
+3. **Execute the compiled binary**:
+   ```powershell
+   ./app.exe
+   ```
+
+---
+
+For comprehensive documentation across all 34 mathematical categories and language grammar, check:
+* 📖 [User Guide (English)](USER_GUIDE.md) | [Hướng dẫn sử dụng (Tiếng Việt)](USER_GUIDE_VI.md)
+* 📐 [TokenVector Syntax Specification](TOKENVECTOR_SYNTAX_SPEC.md) | [Đặc tả cú pháp TokenVector](TOKENVECTOR_SYNTAX_SPEC_VI.md)
+* 🏛️ [TokenVector Official Compiler Repository](https://github.com/nguyenhungtran18/TokenVector)

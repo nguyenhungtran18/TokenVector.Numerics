@@ -173,3 +173,25 @@ entropy = state.von_neumann_entropy()
 | `optim.AdamW(params, lr=0.01)` | `new AdamW<double>(params, lr: 0.01)` |
 | `nn.Linear(2, 8)` | `new Linear<double>(2, 8)` |
 | `with tv.allocate_native(...) as buf:` | `using var buf = NDArray.AllocateNative(...)` |
+
+---
+
+## 7. Compiler Toolchain & Building with `tkvc.exe`
+
+### 1. Download Compiler & Clone Ecosystem Libraries
+To obtain the standalone compiler **`tkvc.exe`**, standard libraries (`stdlib`), and language toolchains, clone or visit the official repository:
+```powershell
+# Clone official TokenVector Compiler & Ecosystem Repository
+git clone https://github.com/nguyenhungtran18/TokenVector.git
+```
+
+### 2. Compiling TokenVector Programs
+You can compile your native TokenVector source files (`.tkv` or `.tv`) with direct linking to `TokenVector.Numerics.dll` into standalone native executables:
+```powershell
+# Compile source file to native Windows PE executable
+./tkvc.exe main.tkv -r TokenVector.Numerics.dll -o app.exe
+
+# Execute the native standalone binary
+./app.exe
+```
+
