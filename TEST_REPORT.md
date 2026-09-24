@@ -105,6 +105,8 @@
 
 ## 2. CLI TEST EXECUTION SUMMARY
 
+> Scope note: this run was captured for the v1.1.0 runtime release. The runtime engine sources and test project were removed from the repository afterward; the shipped binaries remain in `dist/bin/` and the verification load is now carried by the TokenVector stdlib suite (Section 3).
+
 ```text
 Command: dotnet test "TokenVector.Numerics.sln" -c Release
 

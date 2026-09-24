@@ -2,11 +2,11 @@
 # Licensed under the MIT License.
 #
 # TV-1001: TokenVector (`.tkv`) translation of the **Spatial** module (part 2).
-# Source of truth (C# reference implementations, 1:1 sections):
-#   Spatial/Geometry3DAndPointClouds.cs -> point-to-plane / point-to-segment
+# Source of truth (reference implementations, 1:1 sections):
+#   Spatial/Geometry3DAndPointClouds -> point-to-plane / point-to-segment
 #       distance, Moller-Trumbore ray-triangle intersection, AABB intersect,
 #       Kabsch/SVD point cloud registration (ICP core), spherical conversions
-#   Spatial/HyperbolicGeometry.cs -> Poincare distance, Mobius addition,
+#   Spatial/HyperbolicGeometry -> Poincare distance, Mobius addition,
 #       exp/log maps at origin (Poincare ball & Lorentz usage)
 
 import tv
@@ -29,7 +29,7 @@ def _get(arr, i):
     return arr.buffer.data[arr.offset + i]
 
 # ---------------------------------------------------------------------------
-# Distance & Intersections  (Geometry3DAndPointClouds.cs)
+# Distance & Intersections  (Geometry3DAndPointClouds
 # ---------------------------------------------------------------------------
 
 def point_to_plane_distance(point, plane_point, plane_normal):
@@ -182,7 +182,7 @@ def spherical_to_cartesian(r, theta, phi):
     return [x, y, z]
 
 # ---------------------------------------------------------------------------
-# Hyperbolic Geometry  (Spatial/HyperbolicGeometry.cs)
+# Hyperbolic Geometry  (Spatial/HyperbolicGeometry
 # ---------------------------------------------------------------------------
 
 def poincare_distance(u, v, c=1.0, eps=1e-7):

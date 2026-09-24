@@ -1,8 +1,8 @@
 # Copyright (c) TokenVector Project. All rights reserved.
 # Licensed under the MIT License.
 #
-# TV-1001: TokenVector (`.tkv`) translation of Science/Astrodynamics.cs.
-# Source of truth (C# reference implementation, 1:1 sections):
+# TV-1001: TokenVector (`.tkv`) translation of the Science/Astrodynamics module.
+# Source of truth (reference implementation, 1:1 sections):
 #   SolveKepler (Newton + Halley step)         -> solve_kepler
 #   KeplerianToCartesian (PQW -> ECI rotation) -> keplerian_to_cartesian
 #   HohmannTransfer / BiEllipticTransfer       -> hohmann_transfer, bi_elliptic_transfer
@@ -195,7 +195,7 @@ def _cross(a, b):
     return [ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx]
 
 def _vec3_magnitude(v):
-    # Euclidean length of a 3-vector NDArray (C# local function LocalMagnitude).
+    # Euclidean length of a 3-vector NDArray (local function LocalMagnitude).
     x = v.buffer.data[v.offset]
     y = v.buffer.data[v.offset + 1]
     z = v.buffer.data[v.offset + 2]
@@ -203,7 +203,7 @@ def _vec3_magnitude(v):
 
 def gibbs_orbit_determination(r1, r2, r3, mu=EARTH_MU):
     # Gibbs method: velocity v2 at r2 from 3 coplanar position vectors.
-    # TV-1001 note: the C# local function LocalMagnitude is hoisted to the
+    # TV-1001 note: the local function LocalMagnitude is hoisted to the
     # module-level helper `_vec3_magnitude` (TV has no nested defs).
     r1_mag = _vec3_magnitude(r1)
     r2_mag = _vec3_magnitude(r2)

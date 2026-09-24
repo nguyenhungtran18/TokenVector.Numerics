@@ -2,10 +2,10 @@
 # Licensed under the MIT License.
 #
 # TV-1001: TokenVector (`.tkv`) translation of Biology + Robotics modules.
-# Source of truth (C# reference implementations, 1:1 sections):
-#   Biology/ProteinGeometry.cs  -> ComputeDihedralAngle (phi/psi/omega),
+# Source of truth (reference implementations, 1:1 sections):
+#   Biology/ProteinGeometry -> ComputeDihedralAngle (phi/psi/omega),
 #       KabschRMSD, TMScore (d0 = 1.24 (L-15)^(1/3) - 1.8, floor 0.5)
-#   Robotics/OptimalControlAndRobotics.cs -> SolveDiscreteLQR (Riccati
+#   Robotics/OptimalControlAndRobotics -> SolveDiscreteLQR (Riccati
 #       iteration), JacobianDLS (damped least squares IK),
 #       UnicycleKinematics (differential drive)
 #
@@ -37,7 +37,7 @@ def _mat_sub(a, b):
     return result
 
 # ---------------------------------------------------------------------------
-# ProteinGeometry  (Biology/ProteinGeometry.cs)
+# ProteinGeometry  (Biology/ProteinGeometry
 # ---------------------------------------------------------------------------
 
 def _get(arr, i):
@@ -130,7 +130,7 @@ def tm_score(predicted, reference):
     return sum_v / l_ref
 
 # ---------------------------------------------------------------------------
-# OptimalControlAndRobotics  (Robotics/OptimalControlAndRobotics.cs)
+# OptimalControlAndRobotics  (Robotics/OptimalControlAndRobotics
 # ---------------------------------------------------------------------------
 
 def solve_discrete_lqr(a_mat, b_mat, q_mat, r_mat, max_iter=500, tolerance=1e-9):

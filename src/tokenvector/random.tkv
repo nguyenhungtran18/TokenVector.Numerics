@@ -1,8 +1,8 @@
 # Copyright (c) TokenVector Project. All rights reserved.
 # Licensed under the MIT License.
 #
-# TV-1001: TokenVector (`.tkv`) translation of Random/TensorRandom.cs.
-# Source of truth (C# reference implementation, 1:1 sections):
+# TV-1001: TokenVector (`.tkv`) translation of the Random/TensorRandom module.
+# Source of truth (reference implementation, 1:1 sections):
 #   ManualSeed            -> manual_seed
 #   Rand  [0, 1)          -> rand
 #   Randn (Box-Muller)    -> randn / randn_std
@@ -13,9 +13,9 @@
 import tv
 from tv.core import NDArray
 
-# Module-level generator state (mirrors the C# thread-static RNG).
+# Module-level generator state (mirrors the thread-static RNG).
 # TV-1001 note: module-level bindings are single-assignment, so the mutable
-# LCG state lives in a one-element list (equivalent to a C# static field).
+# LCG state lives in a one-element list (equivalent to a static field).
 _rng_state_box = [0]
 
 def manual_seed(seed):

@@ -2,16 +2,16 @@
 # Licensed under the MIT License.
 #
 # TV-1001: TokenVector (`.tkv`) translation of the Ops grid + cumulative + indexing + logic surface.
-# Source of truth (C# reference implementations, 1:1 sections):
-#   Ops/GridOps.cs           -> meshgrid ('xy' 2D + 'ij' ND), diag, diagonal, triu, tril
-#   Ops/CumulativeOps.cs     -> cumsum, cumprod, diff (n-th order)
-#   Ops/IndexingOps.cs       -> filter, set_where, where, take, put
-#   Ops/LogicToleranceOps.cs -> isclose, allclose, all, any (+axis), isnan, isinf, isfinite
+# Source of truth (reference implementations, 1:1 sections):
+#   Ops/GridOps -> meshgrid ('xy' 2D + 'ij' ND), diag, diagonal, triu, tril
+#   Ops/CumulativeOps -> cumsum, cumprod, diff (n-th order)
+#   Ops/IndexingOps -> filter, set_where, where, take, put
+#   Ops/LogicToleranceOps -> isclose, allclose, all, any (+axis), isnan, isinf, isfinite
 #
 # Fidelity notes:
 #   - meshgrid keeps the 'xy' default for exactly two vectors and 'ij' otherwise.
 #   - isclose condition |a-b| <= atol + rtol*|b| with NaN/Inf short-circuiting
-#     matches the C# implementation exactly.
+#     matches the reference implementation exactly.
 
 import tv
 from tv.core import NDArray, BoolNDArray, get_multi_index, row_major_strides, broadcast_shapes, zeros
@@ -26,7 +26,7 @@ def _flat_set(arr, i, v):
     arr.set_flat(i, v)
 
 # ---------------------------------------------------------------------------
-# GridOps  (Ops/GridOps.cs)
+# GridOps  (Ops/GridOps
 # ---------------------------------------------------------------------------
 
 def meshgrid(vectors):
@@ -153,7 +153,7 @@ def _abs(v):
     return v
 
 # ---------------------------------------------------------------------------
-# CumulativeOps  (Ops/CumulativeOps.cs)
+# CumulativeOps  (Ops/CumulativeOps
 # ---------------------------------------------------------------------------
 
 def _normalize_axis(axis, rank):
@@ -258,7 +258,7 @@ def diff(tensor, n=1, axis=-1):
     return current
 
 # ---------------------------------------------------------------------------
-# IndexingOps  (Ops/IndexingOps.cs)
+# IndexingOps  (Ops/IndexingOps
 # ---------------------------------------------------------------------------
 
 def filter(tensor, mask):
@@ -427,7 +427,7 @@ def out_shape_total(shape):
     return total
 
 # ---------------------------------------------------------------------------
-# LogicToleranceOps  (Ops/LogicToleranceOps.cs)
+# LogicToleranceOps  (Ops/LogicToleranceOps
 # ---------------------------------------------------------------------------
 
 def isclose(a, b, rtol=1e-5, atol=1e-8):

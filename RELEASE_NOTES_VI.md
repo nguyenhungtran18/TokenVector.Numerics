@@ -22,7 +22,7 @@ Bản phát hành **v1.1.0** đóng gói **bản dịch ngôn ngữ TokenVector 
 ## 🚀 Các Tính Năng & Bổ Sung Chi Tiết trong v1.1.0
 
 ### 1. Bản dịch ngôn ngữ TokenVector đầy đủ (`src/tokenvector/`, TV-1001)
-* **27 module `.tkv`** (~12.1k dòng) — xây theo quy ước TV-1001 trên toàn bộ 67 file nguồn, mỗi ánh xạ được ghi trong header "Source of truth" của từng file.
+* **27 module `.tkv`** (~12.1k dòng) — thư viện chuẩn TokenVector hoàn chỉnh, mỗi ánh xạ được ghi trong header "Source of truth" của từng file.
 * **Quy ước TV-1001:** hàm snake_case cấp module, giữ nguyên tên class (`NDArray`, `Tensor`, `QState`, `KDTree`, …), các construct dict/`isinstance`/nested-def thay bằng song song list và structural check, Parallel.For/AVX2 gộp về vòng tuần tự (`tkvc -O parallel -O simd` khôi phục ở mức CIL).
 * **Đồ thị import không có cycle:** broadcast-shape helpers đặt trong `tv.core`, `tv.engine` re-export.
 

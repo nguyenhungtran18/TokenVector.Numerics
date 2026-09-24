@@ -2,7 +2,7 @@
 # Licensed under the MIT License.
 #
 # TV-1001: TokenVector (`.tkv`) smoke test suite.
-# Mirrors tests/TokenVector.Numerics.Tests/*.cs coverage: one focused check
+# Mirrors reference test suite coverage: one focused check
 # per translated module, using assert-based verification.
 #
 # Run: tkvc tests/tokenvector/smoke_tests.tkv -r src/tokenvector -o smoke.exe && ./smoke.exe
@@ -198,7 +198,7 @@ def run_ops_tests():
     # Fancy indexing (NumPy parity)
     src6 = from_array([10.0, 20.0, 30.0, 40.0, 50.0, 60.0], [2, 3])
     m2 = tv.compare.greater_than_scalar(src6, 25.0)
-    # Tensor-tensor comparison family (C# Equal/NotEqual/GTE/LTE variants)
+    # Tensor-tensor comparison family (Equal/NotEqual/GTE/LTE variants)
     eqm = tv.compare.equal(from_array([1.0, 2.0, 3.0], [3]), from_array([1.0, 0.0, 3.0], [3]))
     check("compare.equal", eqm.get([0]) and (not eqm.get([1])) and eqm.get([2]))
     nem = tv.compare.not_equal(from_array([1.0, 2.0], [2]), from_array([1.0, 0.0], [2]))
@@ -462,7 +462,7 @@ def run_domain_tests():
     # Root of x^2 - 4 in [0, 5]
     root = tv.optimize.root_brentq(lambda t: t * t - 4.0, 0.0, 5.0)
     check_close("optimize.brentq", root, 2.0, 1e-6)
-    # LP (sign convention identical to the C# implementation):
+    # LP (sign convention identical to the reference implementation):
     # objective row stores -c; entering pivots on negative entries, so with
     # c = [1, 1], A = [[1, 1]], b = [4] the tableau terminates at x+y = 4.
     x_opt, val = tv.optimize.linear_program_simplex(
@@ -517,7 +517,7 @@ def run_domain_tests():
     rho0, u0, v0, f1 = tv.physics.lbm_step(f0, 0.6)
     check_close("physics.lbm_mass", tv.ops.sum(rho0), tv.ops.sum(f0), 1e-9)
     # Quantum: Bell state |Phi+> is pure -> entropy of its full density
-    # matrix is 0 (1:1 with the C# VonNeumannEntropy over the full state),
+    # matrix is 0 (1:1 with the reference implementation over the full state),
     # and each qubit marginal has P(|1>) = 0.5.
     qs = qtm.QState(2)
     qs.h(0)

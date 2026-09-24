@@ -2,16 +2,16 @@
 # Licensed under the MIT License.
 #
 # TV-1001: TokenVector (`.tkv`) translation of the TokenVector.Numerics **LinAlg** module.
-# Source of truth (C# reference implementations, 1:1 sections):
-#   LinAlg/MatrixMultiplication.cs -> matmul / batch_matmul
-#   LinAlg/MatrixOps.cs            -> kron, outer, matrix_power, norm
-#   LinAlg/Decomposition.cs        -> lu, qr, cholesky, solve, inverse, det, trace, schur, solve_sylvester
-#   LinAlg/EinSum.cs               -> einsum
-#   LinAlg/Eigen.cs                -> eigh (Jacobi eigenvalue algorithm)
-#   LinAlg/SVD.cs                  -> svd (one-sided Jacobi, wide-matrix path)
+# Source of truth (reference implementations, 1:1 sections):
+#   LinAlg/MatrixMultiplication -> matmul / batch_matmul
+#   LinAlg/MatrixOps -> kron, outer, matrix_power, norm
+#   LinAlg/Decomposition -> lu, qr, cholesky, solve, inverse, det, trace, schur, solve_sylvester
+#   LinAlg/EinSum -> einsum
+#   LinAlg/Eigen -> eigh (Jacobi eigenvalue algorithm)
+#   LinAlg/SVD -> svd (one-sided Jacobi, wide-matrix path)
 #
 # Fidelity notes:
-#   - `Parallel.For` blocks and AVX2 inner loops in C# collapse to sequential
+#   - `Parallel.For` blocks and AVX2 inner loops in the reference implementation collapse to sequential
 #     scalar loops; `tkvc -O parallel -O simd` restores both at the CIL level.
 #   - Every algorithm is kept numerically identical: same pivoting, same
 #     Householder sign conventions, same Jacobi rotation formulas, same
@@ -58,13 +58,13 @@ def _sqrt(v):
     return est
 
 # ---------------------------------------------------------------------------
-# MatrixMultiplication  (LinAlg/MatrixMultiplication.cs)
+# MatrixMultiplication  (LinAlg/MatrixMultiplication
 # ---------------------------------------------------------------------------
 
 def matmul_2d(a, b, m, k, n, dtype="f64"):
     # Cache-tiled (32x32) 2D multiplication; parallel + SIMD when lowered.
     # Hot loop uses raw flat-index arithmetic on the contiguous buffers
-    # (mirrors the C# unsafe pointer path) instead of per-element get(),
+    # (mirrors the unsafe pointer path) instead of per-element get(),
     # and walks j inside the k loop for unit-stride reads of b.
     block_size = 32
     result = _zeros([m, n], dtype=dtype)
@@ -179,7 +179,7 @@ def matmul(a, b):
     return batch_matmul(a, b, m, k_a, n)
 
 # ---------------------------------------------------------------------------
-# MatrixOps  (LinAlg/MatrixOps.cs)
+# MatrixOps  (LinAlg/MatrixOps
 # ---------------------------------------------------------------------------
 
 def kron(a, b):
@@ -271,7 +271,7 @@ def norm(x, ord="fro"):
     raise ValueError("Norm order not supported")
 
 # ---------------------------------------------------------------------------
-# Decomposition  (LinAlg/Decomposition.cs)
+# Decomposition  (LinAlg/Decomposition
 # ---------------------------------------------------------------------------
 
 def lu(a):
@@ -647,7 +647,7 @@ def _mat_add(a, b):
     return result
 
 # ---------------------------------------------------------------------------
-# EinSum  (LinAlg/EinSum.cs)
+# EinSum  (LinAlg/EinSum
 # ---------------------------------------------------------------------------
 
 def einsum(subscripts, operands):
@@ -796,7 +796,7 @@ def _join_chars(chars):
     return out
 
 # ---------------------------------------------------------------------------
-# Eigen  (LinAlg/Eigen.cs)
+# Eigen  (LinAlg/Eigen
 # ---------------------------------------------------------------------------
 
 def eigh(a):
@@ -885,7 +885,7 @@ def _sort_by_eigval(order, eigvals):
     return order
 
 # ---------------------------------------------------------------------------
-# SVD  (LinAlg/SVD.cs)
+# SVD  (LinAlg/SVD
 # ---------------------------------------------------------------------------
 
 def svd(a):

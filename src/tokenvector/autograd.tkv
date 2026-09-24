@@ -2,13 +2,13 @@
 # Licensed under the MIT License.
 #
 # TV-1001: TokenVector (`.tkv`) translation of the **Autograd** module.
-# Source of truth (C# reference implementations, 1:1 sections):
-#   Autograd/Tensor.cs                          -> class Tensor
-#   Autograd/AutogradNode.cs                    -> class AutogradNode + unbroadcast
-#   Autograd/Nodes/MathAndMatrixNodes.cs        -> add/sub/mul/div/neg/pow/exp/log/matmul/transpose/reshape nodes
-#   Autograd/Nodes/ActivationAndReductionNodes.cs -> relu/sigmoid/tanh/gelu/softmax/sum/mean + mse/cross-entropy losses
-#   Autograd/Optim/Optimizers.cs                -> SGD, AdamW (decoupled weight decay)
-#   Autograd/NN/Modules.cs                      -> Module, Linear (Kaiming-uniform), Sequential, RMSNorm
+# Source of truth (reference implementations, 1:1 sections):
+#   Autograd/Tensor -> class Tensor
+#   Autograd/AutogradNode -> class AutogradNode + unbroadcast
+#   Autograd/Nodes/MathAndMatrixNodes -> add/sub/mul/div/neg/pow/exp/log/matmul/transpose/reshape nodes
+#   Autograd/Nodes/ActivationAndReductionNodes -> relu/sigmoid/tanh/gelu/softmax/sum/mean + mse/cross-entropy losses
+#   Autograd/Optim/Optimizers -> SGD, AdamW (decoupled weight decay)
+#   Autograd/NN/Modules -> Module, Linear (Kaiming-uniform), Sequential, RMSNorm
 #
 # Fidelity notes:
 #   - Reverse-mode VJP over the dynamic DAG with topological ordering is kept
@@ -16,8 +16,8 @@
 #     broadcast singleton dims).
 #   - Softmax uses the numerically stable form exp(x - max)/sum(exp(x - max)).
 #   - AdamW keeps bias-correction (beta^t) and decoupled weight decay order:
-#     decay applies BEFORE moment updates, matching Loshchilov & Hutter / C#.
-#   - GELU uses the tanh approximation with the exact C# constants
+#     decay applies BEFORE moment updates, matching Loshchilov & Hutter.
+#   - GELU uses the tanh approximation with the exact constants
 #     (sqrt(2/pi), 0.044715).
 
 import tv
@@ -26,7 +26,7 @@ from tv.linalg import matmul
 import tv.ops as ops
 
 # ---------------------------------------------------------------------------
-# AutogradNode  (Autograd/AutogradNode.cs)
+# AutogradNode  (Autograd/AutogradNode
 # ---------------------------------------------------------------------------
 
 class AutogradNode:
@@ -88,20 +88,20 @@ def _full(value, shape):
     return result
 
 def _is_tensor(v):
-    # Structural type test standing in for the C# `other is Tensor<T>` overload
+    # Structural type test standing in for the `other is Tensor<T>` overload
     # dispatch. TV-1001 has no isinstance; Tensors carry the class constant
     # IS_TENSOR (probed with getattr default False) — unambiguous because no
     # scalar or NDArray defines it, and truthiness is fixed at True.
     return getattr(v, "IS_TENSOR", False)
 
 # ---------------------------------------------------------------------------
-# Tensor  (Autograd/Tensor.cs)
+# Tensor  (Autograd/Tensor
 # ---------------------------------------------------------------------------
 
 class Tensor:
     # Differentiable tensor with Dynamic Compute Graph (Reverse-Mode Autograd).
     # TV-1001 note: class constant used by _is_tensor for structural type tests
-    # (the C# overload dispatch `other is Tensor<T>` has no isinstance analog).
+    # (the overload dispatch `other is Tensor<T>` has no isinstance analog).
     IS_TENSOR = True
 
     def __init__(self, data, requires_grad=False, grad_fn=None):
@@ -223,7 +223,7 @@ class Tensor:
 
     # -- Operators (Tensor @ Tensor) -------------------------------------------
 
-    # TV-1001 note: the C# `other is Tensor<T>` overload dispatch becomes a
+    # TV-1001 note: the `other is Tensor<T>` overload dispatch becomes a
     # structural check via _is_tensor (Tensors carry requires_grad; scalars
     # and NDArrays do not).
     def __add__(self, other):
@@ -332,7 +332,7 @@ def _bool_str(v):
     return "false"
 
 # ---------------------------------------------------------------------------
-# Math & Matrix nodes  (Autograd/Nodes/MathAndMatrixNodes.cs)
+# Math & Matrix nodes  (Autograd/Nodes/MathAndMatrixNodes
 # ---------------------------------------------------------------------------
 
 class _AddNode(AutogradNode):
@@ -563,7 +563,7 @@ def reshape_tensor(a, new_shape):
     return result
 
 # ---------------------------------------------------------------------------
-# Activation & reduction nodes  (Autograd/Nodes/ActivationAndReductionNodes.cs)
+# Activation & reduction nodes  (Autograd/Nodes/ActivationAndReductionNodes
 # ---------------------------------------------------------------------------
 
 class _ReluNode(AutogradNode):
@@ -773,7 +773,7 @@ def mean_tensor(a, axis=-1, keepdims=False):
     return result
 
 # ---------------------------------------------------------------------------
-# Losses  (ActivationAndReductionNodes.cs #region Losses)
+# Losses  (ActivationAndReductionNodes, region Losses)
 # ---------------------------------------------------------------------------
 
 def mse_loss(y_pred, y_true):
@@ -794,9 +794,9 @@ def cross_entropy_loss(logits, target_one_hot):
     return loss
 
 # ---------------------------------------------------------------------------
-# Optimizers  (Autograd/Optim/Optimizers.cs)
+# Optimizers  (Autograd/Optim/Optimizers
 # ---------------------------------------------------------------------------
-# TV-1001 note: the C# Dictionary<Tensor<T>, NDArray<T>> per-parameter state
+# TV-1001 note: the original per-parameter state
 # maps to index-aligned parallel lists (_velocities / _exp_avg / _exp_avg_sq),
 # one entry per parameter, initialized to None and filled on first step.
 
@@ -911,7 +911,7 @@ def _pow_f(base, exponent):
     return tv.exp(exponent * tv.log(base))
 
 # ---------------------------------------------------------------------------
-# NN Modules  (Autograd/NN/Modules.cs)
+# NN Modules  (Autograd/NN/Modules
 # ---------------------------------------------------------------------------
 
 class Module:

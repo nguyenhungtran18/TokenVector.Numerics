@@ -1,4 +1,4 @@
-﻿name: CI / CD Pipeline
+name: CI / CD Pipeline
 
 on:
   push:
@@ -9,8 +9,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-and-test:
-    name: Build & Test (${{ matrix.os }})
+  verify-stdlib:
+    name: Verify stdlib (.tkv) — ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -19,46 +19,11 @@ jobs:
     - name: Checkout Code
       uses: actions/checkout@v4
 
-    - name: Setup .NET SDK
-      uses: actions/setup-dotnet@v4
+    - name: Setup Python
+      uses: actions/setup-python@v5
       with:
-        dotnet-version: '8.0.x'
+        python-version: '3.12'
 
-    - name: Restore Dependencies
-      run: dotnet restore TokenVector.Numerics.sln
-
-    - name: Build Solution (Release)
-      run: dotnet build TokenVector.Numerics.sln --configuration Release --no-restore
-
-    - name: Run Unit Tests (Release)
-      run: dotnet test TokenVector.Numerics.sln --configuration Release --no-build --verbosity normal --collect:"XPlat Code Coverage"
-
-  publish-packages:
-    name: Package & Publish to GitHub Packages
-    needs: build-and-test
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    permissions:
-      packages: write
-      contents: read
-    steps:
-    - name: Checkout Code
-      uses: actions/checkout@v4
-
-    - name: Setup .NET SDK
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: '8.0.x'
-
-    - name: Restore Project
-      run: dotnet restore src/TokenVector.Numerics/TokenVector.Numerics.csproj
-
-    - name: Build Project (Release)
-      run: dotnet build src/TokenVector.Numerics/TokenVector.Numerics.csproj --configuration Release --no-restore
-
-    - name: Pack NuGet Package (Release)
-      run: dotnet pack src/TokenVector.Numerics/TokenVector.Numerics.csproj --configuration Release --no-build --output ./nupkg
-
-    - name: Push to GitHub Packages
-      run: dotnet nuget push "./nupkg/*.nupkg" --source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json" --api-key ${{ secrets.GITHUB_TOKEN }} --skip-duplicate
-      continue-on-error: true
+    - name: Syntax gate + smoke suite (175 checks)
+      run: python tests/tokenvector/tkv_harness.py
+      # Fails (exit != 0) on any TV-1001 construct violation or failed check.

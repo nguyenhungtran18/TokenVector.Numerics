@@ -31,7 +31,7 @@ TokenVector.Numerics is the numerics runtime of the [TokenVector](https://github
 - [Smoke harness](tests/tokenvector/tkv_harness.py): AST syntax gate (TV-1001 constructs only) + standalone `tv.*` runtime; runs `tests/tokenvector/smoke_tests.tkv` — current: passed=175, failed=0
 - [Coverage audit](tests/tokenvector/numpy_coverage_audit.py): cross-checks the stdlib surface against an independent numeric-library reference (354 library functions audited) — current: matched=354 (100%), missing=0 (script filename kept for reproducibility)
 - [Benchmark](tests/tokenvector/benchmark_vs_numpy.py): numeric parity across matmul/add (0.0), SVD (1.1e-14), FFT (≈5e-12); interpreter-level speed ratios reported with the `tkvc`-compiled caveat
-- Runtime test suite: `dotnet test TokenVector.Numerics.sln -c Release` — current: 84/84 passed
+- Runtime release record: 84/84 unit tests passed at v1.1.0 (run log in TEST_REPORT.md; shipped binaries in dist/bin/). Ongoing verification runs on every push via GitHub Actions (syntax gate + smoke suite)
 
 ## Packaging
 

@@ -1,8 +1,8 @@
 # Copyright (c) TokenVector Project. All rights reserved.
 # Licensed under the MIT License.
 #
-# TV-1001: TokenVector (`.tkv`) translation of LinAlg/Polynomial.cs + NumericalAnalysis.cs (part 6).
-# Source of truth (C# reference implementations, 1:1 sections):
+# TV-1001: TokenVector (`.tkv`) translation of the LinAlg/Polynomial + NumericalAnalysis modules (part 6).
+# Source of truth (reference implementations, 1:1 sections):
 #   PolyFit (Vandermonde + least squares) -> poly_fit
 #   PolyVal (Horner)                      -> poly_val
 #   Roots (linear/quadratic/companion QR) -> roots, roots_tensor
@@ -11,9 +11,9 @@
 #
 # Fidelity notes:
 #   - Companion-matrix eigenvalue solver keeps the shifted Givens QR iteration,
-#     deflation threshold 1e-12, and maxIter = 100 * n of the C# version.
+#     deflation threshold 1e-12, and maxIter = 100 * n of the reference version.
 #   - Roots are returned as Complex pairs (tv.linalg_functions.Complex) or as an
-#     [N, 2] real tensor, matching both C# overloads.
+#     [N, 2] real tensor, matching both overloads.
 
 import tv
 from tv.core import NDArray
@@ -37,7 +37,7 @@ def _flat_set(arr, i, v):
     arr.set_flat(i, v)
 
 # ---------------------------------------------------------------------------
-# Polynomial  (LinAlg/Polynomial.cs)
+# Polynomial  (LinAlg/Polynomial
 # ---------------------------------------------------------------------------
 
 def poly_fit(x, y, deg):
@@ -213,7 +213,7 @@ def _abs_f(v):
     return v
 
 # ---------------------------------------------------------------------------
-# NumericalAnalysis  (LinAlg/NumericalAnalysis.cs)
+# NumericalAnalysis  (LinAlg/NumericalAnalysis
 # ---------------------------------------------------------------------------
 
 def trapezoidal_rule(y, dx):

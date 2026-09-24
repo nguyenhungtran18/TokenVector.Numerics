@@ -2,28 +2,28 @@
 # Licensed under the MIT License.
 #
 # TV-1001: TokenVector (`.tkv`) translation of the TokenVector.Numerics **Core** module.
-# Source of truth (C# reference implementation, 1:1 sections):
-#   src/TokenVector.Numerics/Core/ShapeHelper.cs      -> shape helpers below
-#   src/TokenVector.Numerics/Core/TensorBuffer.cs     -> class TensorBuffer
-#   src/TokenVector.Numerics/Core/NDArray.cs          -> class NDArray
-#   src/TokenVector.Numerics/Core/BoolNDArray.cs      -> class BoolNDArray
-#   src/TokenVector.Numerics/Core/ShapeExtensions.cs  -> expand/squeeze/at_least_*/ravel
+# Source of truth (reference implementation, 1:1 sections):
+#   Core/ShapeHelper -> shape helpers below
+#   Core/TensorBuffer -> class TensorBuffer
+#   Core/NDArray -> class NDArray
+#   Core/BoolNDArray -> class BoolNDArray
+#   Core/ShapeExtensions -> expand/squeeze/at_least_*/ravel
 #
 # Fidelity notes:
-#   - C# `NDArray<T>` is generic over unmanaged numeric types; the TokenVector
+#   - `NDArray<T>` is generic over unmanaged numeric types; the TokenVector
 #     stdlib `NDArray` is dtype-dynamic (f32/f64/i32/i64), matching the
 #     `tv.array(...)` / `tv.tensor(...)` surface in TOKENVECTOR_SYNTAX_SPEC.md.
-#   - C# `unsafe` pointer paths (`GetUnsafePointer`, `NativeMemory.AllocZeroed`)
+#   - `unsafe` pointer paths (`GetUnsafePointer`, `NativeMemory.AllocZeroed`)
 #     map to the native-allocation `with` block defined by the spec
 #     (`with tv.allocate_native(shape, dtype=...) as buf:`), which disposes the
 #     underlying TensorBuffer immediately when the block exits.
 #   - Zero-copy semantics (Slice/Permute/BroadcastTo share the parent buffer and
-#     bump its refcount) are preserved exactly as in C#.
+#     bump its refcount) are preserved exactly as in the reference implementation.
 
 import tv
 
 # ---------------------------------------------------------------------------
-# Broadcast shape helpers  (Engine/BroadcastEngine.cs)
+# Broadcast shape helpers  (Engine/BroadcastEngine
 # ---------------------------------------------------------------------------
 # Hosted in tv.core (instead of tv.engine) so that every stdlib module can
 # import them without a cycle: tv.engine re-exports these as its public
@@ -78,7 +78,7 @@ def compute_broadcast_strides(source_shape, source_strides, target_shape):
     return broadcast_strides
 
 # ---------------------------------------------------------------------------
-# ShapeHelper  (Core/ShapeHelper.cs)
+# ShapeHelper  (Core/ShapeHelper
 # ---------------------------------------------------------------------------
 
 def shape_total_length(shape):
@@ -214,12 +214,12 @@ def clamp_int(value, low, high):
     return value
 
 # ---------------------------------------------------------------------------
-# TensorBuffer  (Core/TensorBuffer.cs)
+# TensorBuffer  (Core/TensorBuffer
 # ---------------------------------------------------------------------------
 
 class TensorBuffer:
     # Hybrid storage: managed GC array OR native unmanaged block, with
-    # reference-counted zero-copy views (parent/shared lifetime in C#).
+    # reference-counted zero-copy views (parent/shared lifetime in the reference implementation).
     def __init__(self, length, data=None, is_native=False):
         if data is None:
             data = []
@@ -279,7 +279,7 @@ def make_native_buffer(length):
     return TensorBuffer(length, is_native=True)
 
 # ---------------------------------------------------------------------------
-# NDArray  (Core/NDArray.cs)
+# NDArray  (Core/NDArray
 # ---------------------------------------------------------------------------
 
 class NDArray:
@@ -529,7 +529,7 @@ def allocate_native(shape, dtype="f64"):
     return NDArray(shape, buffer=buffer, strides=row_major_strides(shape), offset=0, dtype=dtype)
 
 # ---------------------------------------------------------------------------
-# BoolNDArray  (Core/BoolNDArray.cs)
+# BoolNDArray  (Core/BoolNDArray
 # ---------------------------------------------------------------------------
 
 class BoolNDArray:
@@ -587,7 +587,7 @@ def bool_logical_op(a, b, op):
     return res
 
 # ---------------------------------------------------------------------------
-# ShapeExtensions  (Core/ShapeExtensions.cs)
+# ShapeExtensions  (Core/ShapeExtensions
 # ---------------------------------------------------------------------------
 
 def expand_dims(arr, axis):
@@ -728,7 +728,7 @@ def copy(arr):
 def astype(arr, dtype):
     # np.astype: copy with a new dtype label. TV buffers are dtype-dynamic
     # (values already stored as f64/i64), so the cast relabels the copy and
-    # keeps numeric values unchanged — matching the C# Convert path for the
+    # keeps numeric values unchanged — matching the Convert path for the
     # supported f32/f64/i32/i64/u8 set.
     contig = arr.contiguous()
     clone_buffer = contig.buffer.clone()

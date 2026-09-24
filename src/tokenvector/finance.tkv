@@ -1,8 +1,8 @@
 # Copyright (c) TokenVector Project. All rights reserved.
 # Licensed under the MIT License.
 #
-# TV-1001: TokenVector (`.tkv`) translation of Finance/FinanceMath.cs.
-# Source of truth (C# reference implementation, 1:1 sections):
+# TV-1001: TokenVector (`.tkv`) translation of the Finance/FinanceMath module.
+# Source of truth (reference implementation, 1:1 sections):
 #   Black-Scholes-Merton call/put + Greeks (Delta/Gamma/Vega/Theta/Rho)
 #   Markowitz portfolio (return, volatility, Sharpe)
 #   Cashflow discounting (NPV, IRR via Newton-Raphson)

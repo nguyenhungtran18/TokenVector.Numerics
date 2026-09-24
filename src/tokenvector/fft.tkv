@@ -1,14 +1,14 @@
 # Copyright (c) TokenVector Project. All rights reserved.
 # Licensed under the MIT License.
 #
-# TV-1001: TokenVector (`.tkv`) translation of LinAlg/FFT.cs (part 3).
-# Source of truth (C# reference implementation, 1:1 sections):
+# TV-1001: TokenVector (`.tkv`) translation of the LinAlg/FFT module (part 3).
+# Source of truth (reference implementation, 1:1 sections):
 #   FFT1D / IFFT1D / FFT2D / IFFT2D / RFFT1D / IRFFT1D
 #   FFTRadix2 / FFTBluestein (chirp-z) / BitReverse
 #
 # Fidelity notes:
 #   - Power-of-two lengths take the Cooley-Tukey Radix-2 path; arbitrary
-#     lengths take Bluestein's chirp-z convolution path, exactly as C#.
+#     lengths take Bluestein's chirp-z convolution path, exactly as in the reference implementation.
 #   - Parallel.For row/column loops collapse to sequential loops (restored by
 #     `tkvc -O parallel`).
 

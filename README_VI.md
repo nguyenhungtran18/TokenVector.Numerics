@@ -71,21 +71,15 @@ Thư viện đóng vai trò là **Runtime Math & Tensor Engine Đa Ngành Toàn 
 
 ## 🧪 Kết quả Kiểm thử
 
-Toàn bộ **84/84 unit tests tự động** đã vượt qua thành công:
-```powershell
-dotnet test TokenVector.Numerics.sln -c Release
-```
-```text
-Passed!  - Failed: 0, Passed: 84, Skipped: 0, Total: 84, Duration: 179 ms - TokenVector.Numerics.Tests.dll (net8.0)
-```
-
-**Mới trong v1.1.0 — Thư viện chuẩn TokenVector (`.tkv`)**: thư viện nay phát hành cả bằng ngôn ngữ TokenVector (27 module, ~12.1k dòng) với **độ phủ 100% surface hàm số học** (354/354 đã audit) và bộ công cụ kiểm chứng riêng:
+**Thư viện chuẩn TokenVector (`.tkv`)** — 27 module, ~12.1k dòng — được kiểm chứng trên mỗi lần push bằng GitHub Actions CI (syntax gate + 175 smoke checks) và đạt **độ phủ 100% surface hàm số học** (354/354 đã audit):
 ```powershell
 python tests/tokenvector/tkv_harness.py
+#    Syntax gate: all .tkv modules parse, TV-1001 constructs only.
 #    TokenVector stdlib smoke tests: passed=175, failed=0
 python tests/tokenvector/numpy_coverage_audit.py
 #    matched in .tkv stdlib : 354 (100%) | truly missing: 0
 ```
+Bản runtime v1.1.0 cũng đã vượt **84/84 unit tests** ở chế độ Release (log chạy lưu trong [TEST_REPORT.md](TEST_REPORT.md); binary phát hành trong [dist/bin/](dist/bin/)).
 Xem [src/tokenvector/README.md](src/tokenvector/README.md) để biết bản đồ module, bảng độ phủ và benchmark hiệu năng.
 
 ---

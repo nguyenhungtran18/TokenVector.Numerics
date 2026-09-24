@@ -1,8 +1,8 @@
 # Copyright (c) TokenVector Project. All rights reserved.
 # Licensed under the MIT License.
 #
-# TV-1001: TokenVector (`.tkv`) translation of LinAlg/SpecialFunctions.cs (part 5).
-# Source of truth (C# reference implementations, 1:1 sections):
+# TV-1001: TokenVector (`.tkv`) translation of the LinAlg/SpecialFunctions module (part 5).
+# Source of truth (reference implementations, 1:1 sections):
 #   Erf / Erfc (Abramowitz-Stegun 7.1.26)      -> erf, erfc, erf_scalar
 #   Gamma / LogGamma (Lanczos)                 -> gamma, log_gamma
 #   Bessel I0/J0/Y0/K0                         -> bessel_i0/j0/y0/k0
@@ -13,8 +13,8 @@
 #
 # Fidelity notes:
 #   - Every polynomial coefficient (Lanczos P, Bessel rational forms, Airy
-#     constants Ai0/Bi0/AiPrime0) is kept bit-for-bit from the C# source.
-#   - Elementwise NDArray wrappers follow the C# shape: compute a scalar
+#     constants Ai0/Bi0/AiPrime0) is kept bit-for-bit from the reference source.
+#   - Elementwise NDArray wrappers follow the reference shape: compute a scalar
 #     kernel per element over the contiguous layout.
 
 import tv
@@ -254,7 +254,7 @@ def lambert_w(tensor, branch=0):
     return _map_scalar(tensor, lambda x: lambert_w_scalar(x, branch))
 
 def lambert_w_value(x, branch=0):
-    # Scalar entry point (C# double overload LambertW(double, int)).
+    # Scalar entry point (double overload LambertW(double, int)).
     return lambert_w_scalar(x, branch)
 
 # ---------------------------------------------------------------------------

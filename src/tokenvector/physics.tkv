@@ -2,11 +2,11 @@
 # Licensed under the MIT License.
 #
 # TV-1001: TokenVector (`.tkv`) translation of the **Physics** module.
-# Source of truth (C# reference implementations, 1:1 sections):
-#   Physics/PhysicsODEAndFields.cs  -> solve_rk4, solve_symplectic_verlet,
+# Source of truth (reference implementations, 1:1 sections):
+#   Physics/PhysicsODEAndFields -> solve_rk4, solve_symplectic_verlet,
 #       nbody_verlet_step (softened gravity), gradient_3d, divergence_3d,
 #       curl_3d, laplacian_3d
-#   Physics/LatticeBoltzmann2D.cs   -> D2Q9 LBM: initialize_equilibrium, step
+#   Physics/LatticeBoltzmann2D -> D2Q9 LBM: initialize_equilibrium, step
 #       (BGK collision + periodic streaming + bounce-back obstacle boundary)
 #
 # Fidelity notes:

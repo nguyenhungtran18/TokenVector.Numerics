@@ -1,8 +1,8 @@
 # Copyright (c) TokenVector Project. All rights reserved.
 # Licensed under the MIT License.
 #
-# TV-1001: TokenVector (`.tkv`) translation of Optimize/OptimizationAndRootFinding.cs.
-# Source of truth (C# reference implementation, 1:1 sections):
+# TV-1001: TokenVector (`.tkv`) translation of the Optimize/OptimizationAndRootFinding module.
+# Source of truth (reference implementation, 1:1 sections):
 #   RootBrentq / Bisection        -> root_brentq, bisection
 #   MinimizeBrent (golden+parabolic) -> minimize_brent
 #   MinimizeNelderMead (simplex)  -> minimize_nelder_mead

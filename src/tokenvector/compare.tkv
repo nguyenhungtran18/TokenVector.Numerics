@@ -2,14 +2,14 @@
 # Licensed under the MIT License.
 #
 # TV-1001: TokenVector (`.tkv`) translation of the Ops comparison + set + bitwise surface.
-# Source of truth (C# reference implementations, 1:1 sections):
-#   Ops/ComparisonOps.cs  -> greater_than, less_than, equal, ... (scalar + tensor)
-#   Ops/SetOperations.cs  -> intersect1d, union1d, setdiff1d, setxor1d, isin
-#   Ops/BitwiseOps.cs     -> bitwise_and/or/xor/not, left_shift, right_shift
+# Source of truth (reference implementations, 1:1 sections):
+#   Ops/ComparisonOps -> greater_than, less_than, equal, ... (scalar + tensor)
+#   Ops/SetOperations -> intersect1d, union1d, setdiff1d, setxor1d, isin
+#   Ops/BitwiseOps -> bitwise_and/or/xor/not, left_shift, right_shift
 #
 # Fidelity notes:
 #   - Tensor comparisons broadcast via tv.engine (Stride-0 views) exactly as
-#     BroadcastEngine.BroadcastShapes in C#.
+#     BroadcastEngine.BroadcastShapes.
 #   - Set ops are built on tv.manipulation.unique (np.unique semantics).
 
 import tv
@@ -20,7 +20,7 @@ def _flat_get(arr, i):
     return arr.get_flat(i)
 
 # ---------------------------------------------------------------------------
-# ComparisonOps  (Ops/ComparisonOps.cs)
+# ComparisonOps  (Ops/ComparisonOps
 # ---------------------------------------------------------------------------
 
 def _compare_scalar(a, scalar, pred):
@@ -64,23 +64,23 @@ def less_than(a, b):
     return _compare_tensor(a, b, lambda x, y: x < y)
 
 def equal(a, b):
-    # C# Equal<T>(NDArray, NDArray) tensor-tensor variant.
+    # Equal<T>(NDArray, NDArray) tensor-tensor variant.
     return _compare_tensor(a, b, lambda x, y: x == y)
 
 def not_equal(a, b):
-    # C# NotEqual<T>(NDArray, NDArray) tensor-tensor variant.
+    # NotEqual<T>(NDArray, NDArray) tensor-tensor variant.
     return _compare_tensor(a, b, lambda x, y: x != y)
 
 def greater_than_or_equal(a, b):
-    # C# GreaterThanOrEqual<T>(NDArray, NDArray) tensor-tensor variant.
+    # GreaterThanOrEqual<T>(NDArray, NDArray) tensor-tensor variant.
     return _compare_tensor(a, b, lambda x, y: x >= y)
 
 def less_than_or_equal(a, b):
-    # C# LessThanOrEqual<T>(NDArray, NDArray) tensor-tensor variant.
+    # LessThanOrEqual<T>(NDArray, NDArray) tensor-tensor variant.
     return _compare_tensor(a, b, lambda x, y: x <= y)
 
 # ---------------------------------------------------------------------------
-# SetOperations  (Ops/SetOperations.cs)
+# SetOperations  (Ops/SetOperations
 # ---------------------------------------------------------------------------
 
 def _contains(values, v):
@@ -170,7 +170,7 @@ def isin(element, test_elements):
     return res
 
 # ---------------------------------------------------------------------------
-# BitwiseOps  (Ops/BitwiseOps.cs) — integer tensors
+# BitwiseOps  (Ops/BitwiseOps — integer tensors
 # ---------------------------------------------------------------------------
 
 def bitwise_and(a, b):

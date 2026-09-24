@@ -2,18 +2,18 @@
 # Licensed under the MIT License.
 #
 # TV-1001: TokenVector (`.tkv`) translation of Crypto + Graphs modules.
-# Source of truth (C# reference implementations, 1:1 sections):
-#   Crypto/LatticeMath.cs  -> ForwardNTT / InverseNTT (Cooley-Tukey over
+# Source of truth (reference implementations, 1:1 sections):
+#   Crypto/LatticeMath -> ForwardNTT / InverseNTT (Cooley-Tukey over
 #       Z_q with bit reversal), PolyMulNTT (O(N log N) cyclic convolution),
 #       ModPow / ModInverse (extended Euclid), LLLReduction (Lovasz delta)
-#   Graphs/SpectralGraph.cs -> Laplacian (normalized + unnormalized),
+#   Graphs/SpectralGraph -> Laplacian (normalized + unnormalized),
 #       ChebyshevGraphConv (K-order spectral graph convolution)
 #
 # Fidelity notes:
-#   - NTT keeps exact modular arithmetic (long integers in C#; arbitrary
+#   - NTT keeps exact modular arithmetic (long integers in the reference implementation; arbitrary
 #     precision integers in TV), including the (u - v + q) % q correction.
 #   - LLL keeps delta=0.75 default and re-orthonormalizes after each operation
-#     exactly as the C# local function UpdateGramSchmidt (hoisted to the
+#     exactly as the local function UpdateGramSchmidt (hoisted to the
 #     module-level `_gram_schmidt` helper — TV-1001 has no nested defs).
 
 import tv
@@ -27,7 +27,7 @@ def _set(arr, i, v):
     arr.buffer.data[arr.offset + i] = v
 
 # ---------------------------------------------------------------------------
-# Number Theoretic Transform (NTT)  (Crypto/LatticeMath.cs)
+# Number Theoretic Transform (NTT)  (Crypto/LatticeMath
 # ---------------------------------------------------------------------------
 
 def _bit_reverse(data):
@@ -142,7 +142,7 @@ def poly_mul_ntt(poly_a, poly_b, q, root_of_unity):
     return result
 
 # ---------------------------------------------------------------------------
-# LLL Lattice Reduction  (Crypto/LatticeMath.cs)
+# LLL Lattice Reduction  (Crypto/LatticeMath
 # ---------------------------------------------------------------------------
 
 def _dot_row(mat_a, row_a, mat_b, row_b, cols):
@@ -152,7 +152,7 @@ def _dot_row(mat_a, row_a, mat_b, row_b, cols):
     return sum_v
 
 def _gram_schmidt(b, b_star, mu, n, d):
-    # Hoisted C# local function UpdateGramSchmidt.
+    # Hoisted local function UpdateGramSchmidt.
     for i in range(n):
         for j in range(d):
             b_star.set([i, j], b.get([i, j]))
@@ -202,7 +202,7 @@ def lll_reduction(basis, delta=0.75):
     return b
 
 # ---------------------------------------------------------------------------
-# Spectral Graph  (Graphs/SpectralGraph.cs)
+# Spectral Graph  (Graphs/SpectralGraph
 # ---------------------------------------------------------------------------
 
 def laplacian(adjacency_matrix, normalized=True):

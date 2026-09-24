@@ -2,17 +2,17 @@
 # Licensed under the MIT License.
 #
 # TV-1001: TokenVector (`.tkv`) translation of the Ops elementwise + reduction surface.
-# Source of truth (C# reference implementations, 1:1 sections):
-#   Ops/ElementWiseOps.cs      -> add/sub/mul/div/mod/neg (binary + scalar overloads)
-#   Ops/ElementWiseMathOps.cs  -> trig, exp/log, rounding, hypot, unwrap, logaddexp
-#   Ops/ReductionOps.cs        -> sum/mean/prod/min/max (+axis), argmax/argmin
+# Source of truth (reference implementations, 1:1 sections):
+#   Ops/ElementWiseOps -> add/sub/mul/div/mod/neg (binary + scalar overloads)
+#   Ops/ElementWiseMathOps -> trig, exp/log, rounding, hypot, unwrap, logaddexp
+#   Ops/ReductionOps -> sum/mean/prod/min/max (+axis), argmax/argmin
 #
 # Fidelity notes:
-#   - C# operator overloads on NDArray<T> become module-level functions
+#   - operator overloads on NDArray<T> become module-level functions
 #     (add, sub, mul, div, mod, neg, add_scalar, rsub_scalar, ...), following
 #     the TV-1001 stdlib convention.
 #   - Broadcast path uses tv.engine.broadcast_pair (Stride-0 zero-copy), and
-#     reductions keep the exact C# axis normalization and keepdims semantics.
+#     reductions keep the exact axis normalization and keepdims semantics.
 
 import tv
 from tv.core import NDArray, BoolNDArray, get_multi_index, broadcast_shapes
@@ -28,7 +28,7 @@ def _same_shape(a, b):
     return True
 
 def _elementwise_binary(a, b, op):
-    # C# ElementWiseBinaryOp: same-shape fast path + broadcast fallback.
+    # ElementWiseBinaryOp: same-shape fast path + broadcast fallback.
     if _same_shape(a, b):
         result = NDArray(a.shape, dtype=a.dtype)
         for i in range(result.total_length):
@@ -44,7 +44,7 @@ def _elementwise_binary(a, b, op):
     return result
 
 # ---------------------------------------------------------------------------
-# Binary operators  (Ops/ElementWiseOps.cs)
+# Binary operators  (Ops/ElementWiseOps
 # ---------------------------------------------------------------------------
 
 def add(a, b):
@@ -127,7 +127,7 @@ def _trunc_val(x):
     return -tv.floor(-x)
 
 # ---------------------------------------------------------------------------
-# Reductions  (Ops/ReductionOps.cs)
+# Reductions  (Ops/ReductionOps
 # ---------------------------------------------------------------------------
 
 def sum(arr):
@@ -288,7 +288,7 @@ def argmin(arr, axis):
     return result
 
 # ---------------------------------------------------------------------------
-# Element-wise math ops  (Ops/ElementWiseMathOps.cs)
+# Element-wise math ops  (Ops/ElementWiseMathOps
 # ---------------------------------------------------------------------------
 
 def _map(a, fn):

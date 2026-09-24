@@ -71,21 +71,15 @@ The library serves as the **Grand Unified Runtime Math & Tensor Engine**, coveri
 
 ## 🧪 Verification & Quality Assurance
 
-All **84/84 automated unit tests** passed with zero failures in Release mode:
-```powershell
-dotnet test TokenVector.Numerics.sln -c Release
-```
-```text
-Passed!  - Failed: 0, Passed: 84, Skipped: 0, Total: 84, Duration: 179 ms - TokenVector.Numerics.Tests.dll (net8.0)
-```
-
-**New in v1.1.0 — TokenVector stdlib (`.tkv`)**: the library is now also published natively in the TokenVector language (27 modules, ~12.1k lines) with **full numeric-surface coverage** (354/354 audited functions) and its own verification toolchain:
+The **TokenVector stdlib (`.tkv`)** — 27 modules, ~12.1k lines — is verified on every push by GitHub Actions CI (syntax gate + 175 smoke checks) and holds **full numeric-surface coverage** (354/354 audited functions):
 ```powershell
 python tests/tokenvector/tkv_harness.py
+#    Syntax gate: all .tkv modules parse, TV-1001 constructs only.
 #    TokenVector stdlib smoke tests: passed=175, failed=0
 python tests/tokenvector/numpy_coverage_audit.py
 #    matched in .tkv stdlib : 354 (100%) | truly missing: 0
 ```
+The v1.1.0 runtime release additionally passed **84/84 unit tests** in Release mode (run log archived in [TEST_REPORT.md](TEST_REPORT.md); shipped binaries in [dist/bin/](dist/bin/)).
 See [src/tokenvector/README.md](src/tokenvector/README.md) for the module map, coverage tables, and benchmarks.
 
 ---

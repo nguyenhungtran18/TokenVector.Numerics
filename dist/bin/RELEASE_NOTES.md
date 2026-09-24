@@ -22,7 +22,7 @@ The **v1.1.0 release** ships the complete **TokenVector language translation** o
 ## 🚀 Key Additions in v1.1.0
 
 ### 1. Full TokenVector Language Translation (`src/tokenvector/`, TV-1001)
-* **27 `.tkv` modules** (~12.1k lines) — built per the TV-1001 conventions over all 67 source files, every mapping documented in each file's "Source of truth" header.
+* **27 `.tkv` modules** (~12.1k lines) — the complete TokenVector standard library, every mapping documented in each file's "Source of truth" header.
 * **TV-1001 conventions:** snake_case module functions, class names preserved (`NDArray`, `Tensor`, `QState`, `KDTree`, …), dict/`isinstance`/nested-def constructs replaced by parallel lists and structural checks, Parallel.For/AVX2 collapsed to scalar loops (`tkvc -O parallel -O simd` restores them at the CIL level).
 * **Acyclic import graph:** broadcast-shape helpers hosted in `tv.core`, re-exported by `tv.engine`.
 

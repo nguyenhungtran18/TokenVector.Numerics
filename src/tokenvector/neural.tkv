@@ -2,18 +2,18 @@
 # Licensed under the MIT License.
 #
 # TV-1001: TokenVector (`.tkv`) translation of the **Neural** module.
-# Source of truth (C# reference implementations, 1:1 sections):
-#   Neural/Activations.cs                -> relu/leaky_relu/sigmoid/tanh/gelu/softmax (+backward VJPs)
-#   Neural/Losses.cs                     -> mse_loss, cross_entropy_loss (+backward)
-#   Neural/Normalization.cs              -> layer_norm, rms_norm
-#   Neural/AttentionEngine.cs            -> scaled_dot_product_attention (+backward), causal mask, RoPE
-#   Neural/ConvEngine.cs                 -> im2col, conv2d, max_pool_2d
-#   Neural/OptimalTransportAndDiffusion.cs -> sinkhorn (Wasserstein), ddim_step
+# Source of truth (reference implementations, 1:1 sections):
+#   Neural/Activations -> relu/leaky_relu/sigmoid/tanh/gelu/softmax (+backward VJPs)
+#   Neural/Losses -> mse_loss, cross_entropy_loss (+backward)
+#   Neural/Normalization -> layer_norm, rms_norm
+#   Neural/AttentionEngine -> scaled_dot_product_attention (+backward), causal mask, RoPE
+#   Neural/ConvEngine -> im2col, conv2d, max_pool_2d
+#   Neural/OptimalTransportAndDiffusion -> sinkhorn (Wasserstein), ddim_step
 #
 # Fidelity notes:
 #   - Numerically stable sigmoid (two-branch) and softmax (max-shift) preserved.
 #   - Attention keeps 3D/4D batched matmul semantics; backward VJP formulas
-#     mirror the C# exactly (dV = W^T g, dW = g V^T, dQ = dS K, dK = dS^T Q).
+#     mirror the exactly (dV = W^T g, dW = g V^T, dQ = dS K, dK = dS^T Q).
 #   - RoPE keeps thetaBase = 10000 frequency schedule and in-place pair rotation.
 #   - Sinkhorn: Gibbs kernel exp(-M/reg), alternating u/v scaling, 1e-15 guards.
 
@@ -60,7 +60,7 @@ def _softmax_scores(scores, axis=-1):
     return ops.div(exp_result, sum_exp)
 
 # ---------------------------------------------------------------------------
-# Activations  (Neural/Activations.cs)
+# Activations  (Neural/Activations
 # ---------------------------------------------------------------------------
 
 def relu(x):
@@ -176,7 +176,7 @@ def softmax_backward(grad_output, output_softmax, axis=-1):
     return ops.mul(output_softmax, ops.sub(grad_output, dot))
 
 # ---------------------------------------------------------------------------
-# Losses  (Neural/Losses.cs)
+# Losses  (Neural/Losses
 # ---------------------------------------------------------------------------
 
 def mse_loss(predictions, targets):
@@ -225,7 +225,7 @@ def cross_entropy_loss_backward(logits, target_classes):
     return _scale(grad, scale)
 
 # ---------------------------------------------------------------------------
-# Normalization  (Neural/Normalization.cs)
+# Normalization  (Neural/Normalization
 # ---------------------------------------------------------------------------
 
 def layer_norm(x, gamma=None, beta=None, eps=1e-5):
@@ -262,7 +262,7 @@ def rms_norm(x, gamma=None, eps=1e-5):
     return normalized
 
 # ---------------------------------------------------------------------------
-# AttentionEngine  (Neural/AttentionEngine.cs)
+# AttentionEngine  (Neural/AttentionEngine
 # ---------------------------------------------------------------------------
 
 def scaled_dot_product_attention(query, key, value, mask=None):
@@ -333,7 +333,7 @@ def _pow_f(base, exponent):
     return tv.exp(exponent * tv.log(base))
 
 # ---------------------------------------------------------------------------
-# ConvEngine  (Neural/ConvEngine.cs)
+# ConvEngine  (Neural/ConvEngine
 # ---------------------------------------------------------------------------
 
 def im2col(input_t, kernel_h, kernel_w, stride_h=1, stride_w=1, pad_h=0, pad_w=0):
@@ -432,7 +432,7 @@ def max_pool_2d(input_t, pool_h, pool_w, stride_h=2, stride_w=2):
     return [output, indices]
 
 # ---------------------------------------------------------------------------
-# OptimalTransportAndDiffusion  (Neural/OptimalTransportAndDiffusion.cs)
+# OptimalTransportAndDiffusion  (Neural/OptimalTransportAndDiffusion
 # ---------------------------------------------------------------------------
 
 def sinkhorn(a, b, cost_matrix, reg=0.1, max_iter=100, tol=1e-6):

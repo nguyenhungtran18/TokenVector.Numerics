@@ -1,8 +1,8 @@
 # Copyright (c) TokenVector Project. All rights reserved.
 # Licensed under the MIT License.
 #
-# TV-1001: TokenVector (`.tkv`) translation of LinAlg/SignalProcessing.cs (part 4).
-# Source of truth (C# reference implementations, 1:1 sections):
+# TV-1001: TokenVector (`.tkv`) translation of the LinAlg/SignalProcessing module (part 4).
+# Source of truth (reference implementations, 1:1 sections):
 #   Convolve / Correlate / SliceConvMode (ConvMode Full|Same|Valid)
 #   Hanning / Hamming / Blackman / Bartlett DSP windows
 #   DWT / IDWT (haar + Daubechies-4 wavelets)
@@ -10,7 +10,7 @@
 #
 # Fidelity notes:
 #   - Daubechies-4 filter coefficients are kept bit-for-bit.
-#   - Wavelet names are matched case-insensitively as in C# (ToLowerInvariant).
+#   - Wavelet names are matched case-insensitively as in (ToLowerInvariant).
 
 import tv
 from tv.core import NDArray

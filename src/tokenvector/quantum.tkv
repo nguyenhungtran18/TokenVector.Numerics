@@ -1,15 +1,15 @@
 # Copyright (c) TokenVector Project. All rights reserved.
 # Licensed under the MIT License.
 #
-# TV-1001: TokenVector (`.tkv`) translation of Quantum/QuantumEngine.cs.
-# Source of truth (C# reference implementation, 1:1 sections):
+# TV-1001: TokenVector (`.tkv`) translation of the Quantum/QuantumEngine module.
+# Source of truth (reference implementation, 1:1 sections):
 #   QState statevector simulator: H, X, Y, Z, S, T, Rz, CNOT, Toffoli,
 #   CZ, SWAP, CRz, full-circuit QFT, Born-rule Measure, ProbabilityOne,
 #   DensityMatrix, VonNeumannEntropy (via eigh).
 #
 # Fidelity notes:
 #   - Gate application keeps the bit-twiddling index decomposition
-#     (low/high split around the target bit) of the C# implementation.
+#     (low/high split around the target bit) of the reference implementation.
 #   - Measurement collapse uses Born's rule with normalization of surviving
 #     amplitudes and zeroing of the rest.
 
@@ -44,7 +44,7 @@ def _c_mag_sq(a):
     return a.real * a.real + a.imaginary * a.imaginary
 
 class QState:
-    # N-Qubit statevector simulator (up to 28 qubits in the C# engine).
+    # N-Qubit statevector simulator (up to 28 qubits in the reference engine).
     def __init__(self, num_qubits):
         if num_qubits < 1 or num_qubits > 28:
             raise ValueError("Number of qubits must be between 1 and 28")

@@ -2,13 +2,13 @@
 # Licensed under the MIT License.
 #
 # TV-1001: TokenVector (`.tkv`) translation of the **Spatial** module (part 1).
-# Source of truth (C# reference implementations, 1:1 sections):
-#   Spatial/SpatialTreesAndGeometry.cs -> KDTree (O(log N) k-NN), ConvexHull2D
+# Source of truth (reference implementations, 1:1 sections):
+#   Spatial/SpatialTreesAndGeometry -> KDTree (O(log N) k-NN), ConvexHull2D
 #       (Andrew's monotone chain), CDist (euclidean/manhattan/chebyshev/cosine),
 #       PointInPolygon (ray casting), PolygonArea (shoelace)
-#   Spatial/Quaternion.cs              -> Quaternion (axis-angle, euler,
+#   Spatial/Quaternion -> Quaternion (axis-angle, euler,
 #       hamilton product, conjugate, normalize, inverse, slerp, 4x4 matrix)
-#   Spatial/Affine3D.cs                -> 4x4 translation/scaling/rotations,
+#   Spatial/Affine3D -> 4x4 translation/scaling/rotations,
 #       LookAt, PerspectiveFov, Orthographic, Cross, Dot
 
 import tv
@@ -20,7 +20,7 @@ def _abs(v):
     return v
 
 # ---------------------------------------------------------------------------
-# KD-Tree  (Spatial/SpatialTreesAndGeometry.cs)
+# KD-Tree  (Spatial/SpatialTreesAndGeometry
 # ---------------------------------------------------------------------------
 
 class _KDNode:
@@ -237,7 +237,7 @@ def polygon_area(polygon):
     return area * 0.5
 
 # ---------------------------------------------------------------------------
-# Quaternion  (Spatial/Quaternion.cs)
+# Quaternion  (Spatial/Quaternion
 # ---------------------------------------------------------------------------
 
 class Quaternion:
@@ -371,7 +371,7 @@ def quaternion_to_rotation_matrix_4x4(q):
     return m
 
 # ---------------------------------------------------------------------------
-# Affine3D  (Spatial/Affine3D.cs)
+# Affine3D  (Spatial/Affine3D
 # ---------------------------------------------------------------------------
 
 def _eye4():

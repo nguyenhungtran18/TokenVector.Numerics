@@ -2,18 +2,18 @@
 # Licensed under the MIT License.
 #
 # TV-1001: TokenVector (`.tkv`) translation of the TokenVector.Numerics **Engine** module.
-# Source of truth (C# reference implementation, 1:1 sections):
-#   src/TokenVector.Numerics/Engine/BroadcastEngine.cs -> broadcasting below
-#   src/TokenVector.Numerics/Engine/SIMDKernels.cs     -> contiguous kernels below
+# Source of truth (reference implementation, 1:1 sections):
+#   Engine/BroadcastEngine -> broadcasting below
+#   Engine/SIMDKernels -> contiguous kernels below
 #
 # Fidelity notes:
 #   - The AVX2/FMA `Vector256` fast paths and generic `Vector<T>` fallbacks in
-#     SIMDKernels.cs are hardware-intrinsic code paths outside the TokenVector
+#     SIMDKernels are hardware-intrinsic code paths outside the TokenVector
 #     language surface (TV-1001 grammar). They collapse to a single scalar
 #     semantics loop here; `tkvc -O simd` lowers these loops to the same
 #     hardware vector registers when targeting x86_64.
 #   - Broadcasting keeps NumPy right-aligned rules and the Stride-0 trick
-#     (zero-copy virtual expansion) exactly as in C#.
+#     (zero-copy virtual expansion) exactly as in the reference implementation.
 #   - `broadcast_shapes` / `compute_broadcast_strides` are hosted in tv.core so
 #     module imports stay acyclic; tv.engine re-exports them as its surface.
 
@@ -21,7 +21,7 @@ import tv
 from tv.core import NDArray
 
 # ---------------------------------------------------------------------------
-# BroadcastEngine  (Engine/BroadcastEngine.cs)
+# BroadcastEngine  (Engine/BroadcastEngine
 # ---------------------------------------------------------------------------
 
 def broadcast_shapes(shape_a, shape_b):
@@ -47,7 +47,7 @@ def broadcast_pair(a, b):
     return [left, right]
 
 # ---------------------------------------------------------------------------
-# SIMDKernels  (Engine/SIMDKernels.cs) — contiguous elementwise binary ops
+# SIMDKernels  (Engine/SIMDKernels — contiguous elementwise binary ops
 # ---------------------------------------------------------------------------
 
 def add_contiguous(a, b, destination):

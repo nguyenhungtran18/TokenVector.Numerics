@@ -2,17 +2,17 @@
 # Licensed under the MIT License.
 #
 # TV-1001: TokenVector (`.tkv`) translation of the TokenVector.Numerics **LinAlg** module (part 2).
-# Source of truth (C# reference implementations, 1:1 sections):
-#   LinAlg/MatrixFunctions.cs  -> expm, sqrtm, solve_sylvester_cm
-#   LinAlg/LinAlgExtended.cs   -> pinv, matrix_rank, lstsq, cond, solve_band_tridiagonal, null_space, kronecker_sum
-#   LinAlg/Complex.cs          -> class Complex (generic complex pair for DSP/FFT)
+# Source of truth (reference implementations, 1:1 sections):
+#   LinAlg/MatrixFunctions -> expm, sqrtm, solve_sylvester_cm
+#   LinAlg/LinAlgExtended -> pinv, matrix_rank, lstsq, cond, solve_band_tridiagonal, null_space, kronecker_sum
+#   LinAlg/Complex -> class Complex (generic complex pair for DSP/FFT)
 #
 # Fidelity notes:
 #   - Padé (6,6) coefficients of `expm` are kept bit-for-bit:
 #     c = [1, 1/2, 5/44, 1/66, 1/792, 1/15840, 1/665280].
 #   - Denman-Beavers iteration (sqrtm), Thomas algorithm (solve_band_tridiagonal),
-#     and the Moore-Penrose construction (pinv) mirror the C# control flow 1:1.
-#   - C# operator overloads (`+`, `-`, `*` on NDArray) become explicit helpers
+#     and the Moore-Penrose construction (pinv) mirror the control flow 1:1.
+#   - operator overloads (`+`, `-`, `*` on NDArray) become explicit helpers
 #     (_mat_add, _mat_sub, _mat_scale) because TV-1001 stdlib modules use
 #     module-level functions.
 
@@ -50,7 +50,7 @@ def _mat_scale(a, scalar):
     return result
 
 # ---------------------------------------------------------------------------
-# MatrixFunctions  (LinAlg/MatrixFunctions.cs)
+# MatrixFunctions  (LinAlg/MatrixFunctions
 # ---------------------------------------------------------------------------
 
 def expm(a):
@@ -143,7 +143,7 @@ def solve_sylvester_cm(a, b, c):
     return x
 
 # ---------------------------------------------------------------------------
-# LinAlgExtended  (LinAlg/LinAlgExtended.cs)
+# LinAlgExtended  (LinAlg/LinAlgExtended
 # ---------------------------------------------------------------------------
 
 def pinv(a, rcond=None):
@@ -270,7 +270,7 @@ def svd_decompose(a):
     return svd(a)
 
 # ---------------------------------------------------------------------------
-# Complex  (LinAlg/Complex.cs)
+# Complex  (LinAlg/Complex
 # ---------------------------------------------------------------------------
 
 class Complex:

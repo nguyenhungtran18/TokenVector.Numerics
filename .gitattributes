@@ -1,8 +1,7 @@
 # Language statistics for the GitHub language bar.
 #
-# The .tkv standard library (src/tokenvector) is the public face of this
-# repository. The runtime engine sources and the verification toolchain are
-# infrastructure, so they are excluded from language statistics.
-src/TokenVector.Numerics/**/*.cs linguist-generated=true
-tests/TokenVector.Numerics.Tests/**/*.cs linguist-generated=true
+# The published artifact of this repository is the TokenVector standard
+# library (.tkv). The verification toolchain scripts are infrastructure,
+# so they are excluded from language statistics.
+*.tkv linguist-language=TokenVector
 tests/tokenvector/*.py linguist-generated=true

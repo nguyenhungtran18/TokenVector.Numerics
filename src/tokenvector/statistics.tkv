@@ -2,11 +2,11 @@
 # Licensed under the MIT License.
 #
 # TV-1001: TokenVector (`.tkv`) translation of the **Statistics** module.
-# Source of truth (C# reference implementations, 1:1 sections):
-#   Statistics/DistributionsAndTests.cs -> Normal/Exponential/Uniform/StudentT
+# Source of truth (reference implementations, 1:1 sections):
+#   Statistics/DistributionsAndTests -> Normal/Exponential/Uniform/StudentT
 #       PDF+CDF+PPF (Beasley-Springer-Moro), Skewness, Kurtosis, Histogram1D,
 #       TTest1Sample, TTestInd, ANOVA1Way, ChiSquareTest
-#   Statistics/TimeSeriesAndKalman.cs   -> KalmanFilter1D, KalmanFilterND,
+#   Statistics/TimeSeriesAndKalman -> KalmanFilter1D, KalmanFilterND,
 #       SimpleExponentialSmoothing, HoltLinearTrend, Autocorrelation, PACF
 #
 # Fidelity notes:
@@ -313,7 +313,7 @@ def chi_square_test(observed, expected):
     return [chi2, _clamp(p, 0.0, 1.0)]
 
 # ---------------------------------------------------------------------------
-# Kalman Filters  (TimeSeriesAndKalman.cs)
+# Kalman Filters  (TimeSeriesAndKalman
 # ---------------------------------------------------------------------------
 
 class KalmanFilter1D:

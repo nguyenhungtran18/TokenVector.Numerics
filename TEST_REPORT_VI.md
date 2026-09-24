@@ -105,6 +105,8 @@
 
 ## 2. KẾT QUẢ THỰC THI (CLI OUTPUT)
 
+> Ghi chú phạm vi: log này được ghi nhận cho bản runtime v1.1.0. Sau đó phần source engine và test project đã bị loại khỏi repository; binary phát hành vẫn còn trong `dist/bin/` và gánh nặng kiểm chứng nay thuộc bộ suite stdlib TokenVector (Mục 3).
+
 ```text
 Command: dotnet test "TokenVector.Numerics.sln" -c Release
 

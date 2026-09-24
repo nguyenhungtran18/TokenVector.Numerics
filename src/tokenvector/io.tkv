@@ -2,11 +2,11 @@
 # Licensed under the MIT License.
 #
 # TV-1001: TokenVector (`.tkv`) translation of the **IO** module.
-# Source of truth (C# reference implementations, 1:1 sections):
-#   IO/TensorIO.cs            -> NumPy .npy v1.0 writer/reader (magic
+# Source of truth (reference implementations, 1:1 sections):
+#   IO/TensorIO -> NumPy .npy v1.0 writer/reader (magic
 #       \x93NUMPY, version 1.0, 64-byte aligned header), raw binary
 #       (rank + shape + payload), CSV export
-#   IO/TensorArchiveAndMemMap.cs -> .npz multi-tensor ZIP archive and
+#   IO/TensorArchiveAndMemMap -> .npz multi-tensor ZIP archive and
 #       MemoryMappedNDArray (out-of-core zero-RAM disk-backed tensor)
 #
 # Fidelity notes:
@@ -14,7 +14,7 @@
 #       write_bytes) from the runtime `io` builtin namespace; file I/O keeps
 #       the exact .npy v1.0 on-disk layout, including the 64-byte alignment
 #       padding of the header dictionary.
-#   - Endianness: little-endian '<f8' etc., matching the C# x86_64 layout.
+#   - Endianness: little-endian '<f8' etc., matching the x86_64 layout.
 
 import tv
 from tv.core import NDArray, row_major_strides, shape_total_length
@@ -39,7 +39,7 @@ def _dtype_element_size(dtype):
     return 8
 
 # ---------------------------------------------------------------------------
-# NumPy .npy format I/O  (IO/TensorIO.cs)
+# NumPy .npy format I/O  (IO/TensorIO
 # ---------------------------------------------------------------------------
 
 def _shape_string(shape):
@@ -239,7 +239,7 @@ def _le_bytes_to_tensor(tensor, raw, offset, total):
         tensor.buffer.data[tensor.offset + i] = v
 
 # ---------------------------------------------------------------------------
-# Raw binary I/O  (IO/TensorIO.cs #region Raw Binary I/O)
+# Raw binary I/O  (IO/TensorIO, region Raw Binary I/O)
 # ---------------------------------------------------------------------------
 
 def save_binary(file_path, tensor):
@@ -275,7 +275,7 @@ def _le_to_int32(raw, offset):
     return v
 
 # ---------------------------------------------------------------------------
-# CSV I/O  (IO/TensorIO.cs #region CSV I/O)
+# CSV I/O  (IO/TensorIO, region CSV I/O)
 # ---------------------------------------------------------------------------
 
 def save_csv(file_path, tensor, delimiter=","):
@@ -296,7 +296,7 @@ def save_csv(file_path, tensor, delimiter=","):
     return file_path
 
 # ---------------------------------------------------------------------------
-# NPZ archive  (IO/TensorArchiveAndMemMap.cs)
+# NPZ archive  (IO/TensorArchiveAndMemMap
 # ---------------------------------------------------------------------------
 
 def save_npz(file_path, named_tensors, compress=True):

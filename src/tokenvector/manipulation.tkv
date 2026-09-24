@@ -2,14 +2,14 @@
 # Licensed under the MIT License.
 #
 # TV-1001: TokenVector (`.tkv`) translation of the Ops manipulation + sorting + statistics surface.
-# Source of truth (C# reference implementations, 1:1 sections):
-#   Ops/ManipulationOps.cs -> concatenate, stack, vstack, hstack, split, tile, repeat, pad, roll, flip
-#   Ops/SortingOps.cs      -> sort, argsort, unique, nonzero, clip
-#   Ops/StatisticsOps.cs   -> var, std, median, percentile, cov, corrcoef
+# Source of truth (reference implementations, 1:1 sections):
+#   Ops/ManipulationOps -> concatenate, stack, vstack, hstack, split, tile, repeat, pad, roll, flip
+#   Ops/SortingOps -> sort, argsort, unique, nonzero, clip
+#   Ops/StatisticsOps -> var, std, median, percentile, cov, corrcoef
 #
 # Fidelity notes:
 #   - All index math (axis normalization, coordinate reconstruction) follows
-#     the C# implementations 1:1, including Tile's left-padded reps and
+#     the reference implementations 1:1, including Tile's left-padded reps and
 #     Percentile's linear interpolation (floor/ceil neighbors).
 
 import tv
@@ -46,7 +46,7 @@ def _reconstruct_coords(reduced_coords, axis, axis_val):
     return coords
 
 # ---------------------------------------------------------------------------
-# ManipulationOps  (Ops/ManipulationOps.cs)
+# ManipulationOps  (Ops/ManipulationOps
 # ---------------------------------------------------------------------------
 
 def concatenate(tensors, axis=0):
@@ -275,7 +275,7 @@ def flip(tensor, axis=0):
     return result
 
 # ---------------------------------------------------------------------------
-# SortingOps  (Ops/SortingOps.cs)
+# SortingOps  (Ops/SortingOps
 # ---------------------------------------------------------------------------
 
 def sort(tensor, axis=-1, descending=False):
@@ -418,7 +418,7 @@ def _from_list(values):
     return result
 
 # ---------------------------------------------------------------------------
-# StatisticsOps  (Ops/StatisticsOps.cs)
+# StatisticsOps  (Ops/StatisticsOps
 # ---------------------------------------------------------------------------
 
 def _sqrt(v):
