@@ -50,8 +50,14 @@ jobs:
       with:
         dotnet-version: '8.0.x'
 
+    - name: Restore Project
+      run: dotnet restore src/TokenVector.Numerics/TokenVector.Numerics.csproj
+
+    - name: Build Project (Release)
+      run: dotnet build src/TokenVector.Numerics/TokenVector.Numerics.csproj --configuration Release --no-restore
+
     - name: Pack NuGet Package (Release)
-      run: dotnet pack src/TokenVector.Numerics/TokenVector.Numerics.csproj --configuration Release --output ./nupkg
+      run: dotnet pack src/TokenVector.Numerics/TokenVector.Numerics.csproj --configuration Release --no-build --output ./nupkg
 
     - name: Push to GitHub Packages
       run: dotnet nuget push "./nupkg/*.nupkg" --source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json" --api-key ${{ secrets.GITHUB_TOKEN }} --skip-duplicate
