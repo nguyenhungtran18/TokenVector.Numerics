@@ -110,4 +110,4 @@ Tài liệu này tổng hợp **8 lĩnh vực toán học tiên phong của th�
 
 ## 💡 KẾT LUẬN
 
-Việc thiết kế `TokenVector.Numerics` dưới dạng một thư viện C# 12 / .NET 8 LTS thuần túy, hiệu năng cao, độc lập 100% với kiến trúc module mở chính là bàn đạp chiến lược giúp **TokenVector trở thành ngôn ngữ lập trình khoa học đi trước thời đại 10 - 20 năm**, luôn sẵn sàng đón đầu các bước đột phá toán học mới nhất của nhân loại.
+Việc thiết kế `TokenVector.Numerics` dưới dạng một thư viện runtime thuần túy trên nền .NET 8 LTS, hiệu năng cao, độc lập 100% với kiến trúc module mở chính là bàn đạp chiến lược giúp **TokenVector trở thành ngôn ngữ lập trình khoa học đi trước thời đại 10 - 20 năm**, luôn sẵn sàng đón đầu các bước đột phá toán học mới nhất của nhân loại.
