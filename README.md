@@ -2,12 +2,24 @@
 
 [ 🇬🇧 English ](README.md) | [ 🇻🇳 Tiếng Việt ](README_VI.md)
 
+<p align="center">
+  <img src="assets/icon.png" alt="TokenVector" width="128" />
+</p>
+
+<h1 align="center">TokenVector.Numerics</h1>
+
+<p align="center">
+  <strong>Enterprise Tensor & Mathematical Super-Library</strong><br/>
+  Numerics runtime for the <a href="https://github.com/nguyenhungtran18/TokenVector">TokenVector</a> language
+</p>
+
 [![.NET 8](https://img.shields.io/badge/.NET-8.0%20LTS-purple.svg)](https://dotnet.microsoft.com/)
-[![C# 12](https://img.shields.io/badge/C%23-12.0-blue.svg)](https://learn.microsoft.com/dotnet/csharp/)
 [![CI / CD](https://github.com/nguyenhungtran18/TokenVector.Numerics/actions/workflows/ci.yml/badge.svg)](https://github.com/nguyenhungtran18/TokenVector.Numerics/actions)
-[![NuGet](https://img.shields.io/badge/NuGet-v1.0.1-blue.svg)](https://github.com/nguyenhungtran18/TokenVector.Numerics/packages)
+[![NuGet](https://img.shields.io/badge/NuGet-v1.1.0-blue.svg)](https://github.com/nguyenhungtran18/TokenVector.Numerics/packages)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Tests](https://img.shields.io/badge/Tests-84%2F84%20Passed-brightgreen.svg)]()
+[![TokenVector stdlib](https://img.shields.io/badge/.tkv%20stdlib-100%25%20numeric%20surface-9cf.svg)](src/tokenvector/README.md)
+[![llms.txt](https://img.shields.io/badge/llms.txt-AI%20index-8a2be2.svg)](llms.txt)
 
 **`TokenVector.Numerics.dll`** is a high-performance, standalone mathematical library for multidimensional tensors, Automatic Differentiation (Autograd Engine), analytical linear algebra, optimization, spline interpolation, computational physics, quantitative finance, astrodynamics, quantum computing, post-quantum cryptography, and non-Euclidean geometry built for the [**TokenVector**](https://github.com/nguyenhungtran18/TokenVector) ecosystem and compiler (a statically-typed native language compiling directly to .NET CIL AOT).
 
@@ -17,43 +29,43 @@ The library serves as the **Grand Unified Runtime Math & Tensor Engine**, coveri
 
 ## 📋 Key Features of TokenVector.Numerics
 
-| Category | TokenVector.Numerics (.NET 8 / C# 12) |
+| Category | TokenVector.Numerics |
 | :--- | :--- |
 | **Architecture & Threading** | **True No-GIL Multithreading**; scales 100% across all CPU cores via `Parallel.For` |
 | **Compilation & Runtime** | Direct CIL opcode generation, Native AOT compilation, JIT Hardware Intrinsics |
-| **Automatic Differentiation** | ✅ **Native Dynamic DAG Autograd**, Reverse-Mode VJP, Unbroadcasting, `Tensor<T>`, `AdamW`, `SGD`, `Linear`, `RMSNorm` |
+| **Automatic Differentiation** | **Native Dynamic DAG Autograd**, Reverse-Mode VJP, Unbroadcasting, `Tensor<T>`, `AdamW`, `SGD`, `Linear`, `RMSNorm` |
 | **Memory & Zero-Copy Slicing** | Hybrid `TensorBuffer<T>` (GC + `NativeMemory.AllocZeroed`), $O(1)$ zero-copy slicing |
-| **Broadcasting Engine** | NumPy-standard right-aligned broadcasting with **Stride-0 Tricking** |
+| **Broadcasting Engine** | Right-aligned broadcasting with **Stride-0 Tricking** (zero-copy virtual expansion) |
 | **Hardware SIMD Vectorization** | Generic `Vector<T>` + fast-path `Vector256<float/double>`, AVX2, FMA |
 | **Matrix Algebra (LinAlg)** | Tiled MatMul Cache-Blocking 32x32, Thomas Tridiagonal $O(N)$, Solve $Ax=b$, Inverse, Det |
 | **Matrix Decompositions** | `LU` (Partial Pivoting), `QR` (Householder), `Cholesky` (SPD), `SVD` (Jacobi), `Eigen` (`Eigh`), `NullSpace` |
-| **Einstein Summation & Kronecker**| ✅ `EinSum.Evaluate`, `KroneckerSum` ($A \oplus B$), `Kron`, `Outer` |
-| **Matrix Functions** | ✅ `Expm` ($e^A$ Padé [6/6]), `Sqrtm` ($\sqrt{A}$ Denman-Beavers), `SolveSylvester` |
-| **Nonlinear Optimization** | ✅ `MinimizeBrent`, `MinimizeNelderMead` (Simplex), `MinimizeBFGS`, `RootBrentq`, `LinearProgramSimplex` |
-| **Interpolation & Splines** | ✅ `CubicSpline` 1D, `BilinearInterpolation` 2D, `FitRBF` (Radial Basis Function), `Barycentric` |
-| **Statistical Distributions** | ✅ `NormalPDF/CDF/PPF`, `StudentT`, `Exponential`, `Skewness`, `Kurtosis`, `TTest1Sample`, `TTestInd`, `ANOVA1Way`, `ChiSquareTest` |
-| **Spatial KD-Trees & Geometry** | ✅ `KDTree` ($O(\log N)$ k-NN), `ConvexHull2D` (Monotone Chain), `CDist`, `PointInPolygon`, `PolygonArea` |
-| **Signal Processing & FFT** | ✅ **Bluestein Chirp-Z FFT** for **arbitrary prime length $N$**, `RFFT1D`, `Convolve`, `Correlate`, DSP Windows |
-| **Special Mathematical Functions**| ✅ `Beta`, `LogBeta`, `Digamma`, `Sinc`, `Logit`, `Expit`, `Erfinv`, `Erf`, `Gamma`, `LogGamma`, `BesselI0/J0` |
-| **Element-wise & Trigonometry** | ✅ `Sin`, `Cos`, `Tan`, `ArcTan2`, `Sinh`, `Cosh`, `Tanh`, `Exp2`, `Expm1`, `Log1p`, `LogAddExp`, `Hypot`, `Deg2Rad` |
-| **Polynomials & Root Finding** | ✅ `PolyFit` (Vandermonde + `LstSq`), `PolyVal` (Horner), `Roots` (Companion QR) |
-| **Cumulative & Differences** | ✅ `CumSum`, `CumProd`, `Diff` ($n$-th order differences) |
-| **Grid Operations & Shapes** | ✅ `Meshgrid`, `Diag`, `Diagonal`, `Triu`, `Tril`, `ExpandDims`, `Squeeze`, `BroadcastTo`, `UnravelIndex` |
-| **Archive Storage & Out-of-Core**| ✅ `.npy` v1.0, `.npz` Zip multi-tensor, `MemoryMappedNDArray` (Zero-RAM disk map) |
-| **Astrodynamics & Space Mech** | ✅ `J2Perturbation`, `BiEllipticTransfer`, `GibbsOrbitDetermination`, `ECI_To_ECEF`, `SolveKepler`, `HohmannTransfer` |
-| **Quantitative Finance** | ✅ `BinomialTreeAmericanOption`, `ValueAtRisk` (VaR/CVaR), `BondPrice`, `MacaulayDuration`, `NelsonSiegel`, Black-Scholes, Greeks |
-| **Time Series & Kalman Filter** | ✅ `KalmanFilter1D`, `KalmanFilterND`, `HoltLinearTrend`, `Autocorrelation`, `PACF` |
-| **Computational Physics & ODE** | ✅ Runge-Kutta 4 (`SolveRK4`), Symplectic Verlet N-Body, `Gradient3D`, `Divergence3D`, `Laplacian3D` |
-| **AI, LLM & Transformer Kernels**| ✅ `ApplyRoPE` (Rotary Position Embedding), `RMSNorm`, `ScaledDotProductAttention`, `im2col Conv2D`, `GELU`, `LayerNorm` |
-| **Quantum State Simulator** | ✅ N-Qubit `QState`, $H, X, Y, Z, S, T, Rz, \text{CZ}, \text{SWAP}, \text{CRz}, \text{CNOT}, \text{Toffoli}$, Circuit `QFT`, Born rule |
-| **Post-Quantum Cryptography** | ✅ Number Theoretic Transform (`ForwardNTT`/`InverseNTT`), `PolyMulNTT`, LLL Lattice Reduction |
-| **Structural Biology (AlphaFold)**| ✅ Dihedral Angles ($\phi, \psi, \omega$), Kabsch RMSD, TM-Score Fold Similarity |
-| **Spectral Graph & GNN** | ✅ Normalized Graph Laplacian $L_{sym}$, Chebyshev Polynomial Graph Convolution |
-| **Fluid Dynamics (CFD)** | ✅ 2D Lattice Boltzmann Method (LBM D2Q9) Navier-Stokes simulation |
-| **Optimal Transport & Diffusion** | ✅ Entropic Sinkhorn Wasserstein Distance, DDIM Generative Diffusion Step |
-| **Optimal Control & Robotics** | ✅ Discrete/Continuous Riccati LQR (`SolveDiscreteLQR`), Damped Least Squares IK (`JacobianDLS`) |
-| **Hyperbolic Non-Euclidean Geom**| ✅ Poincaré Ball Geodesic, Möbius Addition ($u \oplus_c v$), Lorentz/Hyperboloid Exp/Log Maps |
-| **Packaging & Distribution** | ✅ Single standalone `TokenVector.Numerics.dll` assembly |
+| **Einstein Summation & Kronecker**| `EinSum.Evaluate`, `KroneckerSum` ($A \oplus B$), `Kron`, `Outer` |
+| **Matrix Functions** | `Expm` ($e^A$ Padé [6/6]), `Sqrtm` ($\sqrt{A}$ Denman-Beavers), `SolveSylvester` |
+| **Nonlinear Optimization** | `MinimizeBrent`, `MinimizeNelderMead` (Simplex), `MinimizeBFGS`, `RootBrentq`, `LinearProgramSimplex` |
+| **Interpolation & Splines** | `CubicSpline` 1D, `BilinearInterpolation` 2D, `FitRBF` (Radial Basis Function), `Barycentric` |
+| **Statistical Distributions** | `NormalPDF/CDF/PPF`, `StudentT`, `Exponential`, `Skewness`, `Kurtosis`, `TTest1Sample`, `TTestInd`, `ANOVA1Way`, `ChiSquareTest` |
+| **Spatial KD-Trees & Geometry** | `KDTree` ($O(\log N)$ k-NN), `ConvexHull2D` (Monotone Chain), `CDist`, `PointInPolygon`, `PolygonArea` |
+| **Signal Processing & FFT** | **Bluestein Chirp-Z FFT** for **arbitrary prime length $N$**, `RFFT1D`, `Convolve`, `Correlate`, DSP Windows |
+| **Special Mathematical Functions**| `Beta`, `LogBeta`, `Digamma`, `Sinc`, `Logit`, `Expit`, `Erfinv`, `Erf`, `Gamma`, `LogGamma`, `BesselI0/J0` |
+| **Element-wise & Trigonometry** | `Sin`, `Cos`, `Tan`, `ArcTan2`, `Sinh`, `Cosh`, `Tanh`, `Exp2`, `Expm1`, `Log1p`, `LogAddExp`, `Hypot`, `Deg2Rad` |
+| **Polynomials & Root Finding** | `PolyFit` (Vandermonde + `LstSq`), `PolyVal` (Horner), `Roots` (Companion QR) |
+| **Cumulative & Differences** | `CumSum`, `CumProd`, `Diff` ($n$-th order differences) |
+| **Grid Operations & Shapes** | `Meshgrid`, `Diag`, `Diagonal`, `Triu`, `Tril`, `ExpandDims`, `Squeeze`, `BroadcastTo`, `UnravelIndex` |
+| **Archive Storage & Out-of-Core**| `.npy` v1.0, `.npz` Zip multi-tensor, `MemoryMappedNDArray` (Zero-RAM disk map) |
+| **Astrodynamics & Space Mech** | `J2Perturbation`, `BiEllipticTransfer`, `GibbsOrbitDetermination`, `ECI_To_ECEF`, `SolveKepler`, `HohmannTransfer` |
+| **Quantitative Finance** | `BinomialTreeAmericanOption`, `ValueAtRisk` (VaR/CVaR), `BondPrice`, `MacaulayDuration`, `NelsonSiegel`, Black-Scholes, Greeks |
+| **Time Series & Kalman Filter** | `KalmanFilter1D`, `KalmanFilterND`, `HoltLinearTrend`, `Autocorrelation`, `PACF` |
+| **Computational Physics & ODE** | Runge-Kutta 4 (`SolveRK4`), Symplectic Verlet N-Body, `Gradient3D`, `Divergence3D`, `Laplacian3D` |
+| **AI, LLM & Transformer Kernels**| `ApplyRoPE` (Rotary Position Embedding), `RMSNorm`, `ScaledDotProductAttention`, `im2col Conv2D`, `GELU`, `LayerNorm` |
+| **Quantum State Simulator** | N-Qubit `QState`, $H, X, Y, Z, S, T, Rz, \text{CZ}, \text{SWAP}, \text{CRz}, \text{CNOT}, \text{Toffoli}$, Circuit `QFT`, Born rule |
+| **Post-Quantum Cryptography** | Number Theoretic Transform (`ForwardNTT`/`InverseNTT`), `PolyMulNTT`, LLL Lattice Reduction |
+| **Structural Biology (AlphaFold)**| Dihedral Angles ($\phi, \psi, \omega$), Kabsch RMSD, TM-Score Fold Similarity |
+| **Spectral Graph & GNN** | Normalized Graph Laplacian $L_{sym}$, Chebyshev Polynomial Graph Convolution |
+| **Fluid Dynamics (CFD)** | 2D Lattice Boltzmann Method (LBM D2Q9) Navier-Stokes simulation |
+| **Optimal Transport & Diffusion** | Entropic Sinkhorn Wasserstein Distance, DDIM Generative Diffusion Step |
+| **Optimal Control & Robotics** | Discrete/Continuous Riccati LQR (`SolveDiscreteLQR`), Damped Least Squares IK (`JacobianDLS`) |
+| **Hyperbolic Non-Euclidean Geom**| Poincaré Ball Geodesic, Möbius Addition ($u \oplus_c v$), Lorentz/Hyperboloid Exp/Log Maps |
+| **Packaging & Distribution** | Single standalone `TokenVector.Numerics.dll` assembly |
 
 ---
 
@@ -64,8 +76,17 @@ All **84/84 automated unit tests** passed with zero failures in Release mode:
 dotnet test TokenVector.Numerics.sln -c Release
 ```
 ```text
-Passed!  - Failed: 0, Passed: 84, Skipped: 0, Total: 84, Duration: 143 ms - TokenVector.Numerics.Tests.dll (net8.0)
+Passed!  - Failed: 0, Passed: 84, Skipped: 0, Total: 84, Duration: 179 ms - TokenVector.Numerics.Tests.dll (net8.0)
 ```
+
+**New in v1.1.0 — TokenVector stdlib (`.tkv`)**: the library is now also published natively in the TokenVector language (27 modules, ~12.1k lines) with **full numeric-surface coverage** (354/354 audited functions) and its own verification toolchain:
+```powershell
+python tests/tokenvector/tkv_harness.py
+#    TokenVector stdlib smoke tests: passed=175, failed=0
+python tests/tokenvector/numpy_coverage_audit.py
+#    matched in .tkv stdlib : 354 (100%) | truly missing: 0
+```
+See [src/tokenvector/README.md](src/tokenvector/README.md) for the module map, coverage tables, and benchmarks.
 
 ---
 

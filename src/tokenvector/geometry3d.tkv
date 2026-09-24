@@ -1,0 +1,278 @@
+# Copyright (c) TokenVector Project. All rights reserved.
+# Licensed under the MIT License.
+#
+# TV-1001: TokenVector (`.tkv`) translation of the **Spatial** module (part 2).
+# Source of truth (C# reference implementations, 1:1 sections):
+#   Spatial/Geometry3DAndPointClouds.cs -> point-to-plane / point-to-segment
+#       distance, Moller-Trumbore ray-triangle intersection, AABB intersect,
+#       Kabsch/SVD point cloud registration (ICP core), spherical conversions
+#   Spatial/HyperbolicGeometry.cs -> Poincare distance, Mobius addition,
+#       exp/log maps at origin (Poincare ball & Lorentz usage)
+
+import tv
+from tv.core import NDArray
+from tv.linalg import matmul, svd as _svd, det as _det
+
+def _abs(v):
+    if v < 0.0:
+        return -v
+    return v
+
+def _clamp(v, low, high):
+    if v < low:
+        return low
+    if v > high:
+        return high
+    return v
+
+def _get(arr, i):
+    return arr.buffer.data[arr.offset + i]
+
+# ---------------------------------------------------------------------------
+# Distance & Intersections  (Geometry3DAndPointClouds.cs)
+# ---------------------------------------------------------------------------
+
+def point_to_plane_distance(point, plane_point, plane_normal):
+    # Signed distance from point to plane (plane defined by point + unit normal).
+    dot_v = 0.0
+    for i in range(3):
+        dot_v = dot_v + (_get(point, i) - _get(plane_point, i)) * _get(plane_normal, i)
+    return dot_v
+
+def point_to_segment_distance(p, a, b):
+    # Minimum Euclidean distance from point P to segment AB.
+    ab_x = _get(b, 0) - _get(a, 0)
+    ab_y = _get(b, 1) - _get(a, 1)
+    ab_z = _get(b, 2) - _get(a, 2)
+    ap_x = _get(p, 0) - _get(a, 0)
+    ap_y = _get(p, 1) - _get(a, 1)
+    ap_z = _get(p, 2) - _get(a, 2)
+    ab_len_sq = ab_x * ab_x + ab_y * ab_y + ab_z * ab_z
+    if ab_len_sq < 1e-15:
+        return tv.sqrt(ap_x * ap_x + ap_y * ap_y + ap_z * ap_z)
+    t = _clamp((ap_x * ab_x + ap_y * ab_y + ap_z * ab_z) / ab_len_sq, 0.0, 1.0)
+    proj_x = _get(a, 0) + t * ab_x
+    proj_y = _get(a, 1) + t * ab_y
+    proj_z = _get(a, 2) + t * ab_z
+    dx = _get(p, 0) - proj_x
+    dy = _get(p, 1) - proj_y
+    dz = _get(p, 2) - proj_z
+    return tv.sqrt(dx * dx + dy * dy + dz * dz)
+
+def ray_triangle_intersect(ray_origin, ray_dir, v0, v1, v2):
+    # Moller-Trumbore ray-triangle intersection ->
+    # [has_hit, t, barycentric_u, barycentric_v].
+    eps = 1e-7
+    edge1_x = _get(v1, 0) - _get(v0, 0)
+    edge1_y = _get(v1, 1) - _get(v0, 1)
+    edge1_z = _get(v1, 2) - _get(v0, 2)
+    edge2_x = _get(v2, 0) - _get(v0, 0)
+    edge2_y = _get(v2, 1) - _get(v0, 1)
+    edge2_z = _get(v2, 2) - _get(v0, 2)
+    # pvec = rayDir x edge2
+    pvec_x = _get(ray_dir, 1) * edge2_z - _get(ray_dir, 2) * edge2_y
+    pvec_y = _get(ray_dir, 2) * edge2_x - _get(ray_dir, 0) * edge2_z
+    pvec_z = _get(ray_dir, 0) * edge2_y - _get(ray_dir, 1) * edge2_x
+    det = edge1_x * pvec_x + edge1_y * pvec_y + edge1_z * pvec_z
+    if _abs(det) < eps:
+        return [False, 0.0, 0.0, 0.0]
+    inv_det = 1.0 / det
+    # tvec = rayOrigin - v0
+    tvec_x = _get(ray_origin, 0) - _get(v0, 0)
+    tvec_y = _get(ray_origin, 1) - _get(v0, 1)
+    tvec_z = _get(ray_origin, 2) - _get(v0, 2)
+    u = (tvec_x * pvec_x + tvec_y * pvec_y + tvec_z * pvec_z) * inv_det
+    if u < 0.0 or u > 1.0:
+        return [False, 0.0, 0.0, 0.0]
+    # qvec = tvec x edge1
+    qvec_x = tvec_y * edge1_z - tvec_z * edge1_y
+    qvec_y = tvec_z * edge1_x - tvec_x * edge1_z
+    qvec_z = tvec_x * edge1_y - tvec_y * edge1_x
+    v = (_get(ray_dir, 0) * qvec_x + _get(ray_dir, 1) * qvec_y + _get(ray_dir, 2) * qvec_z) * inv_det
+    if v < 0.0 or u + v > 1.0:
+        return [False, 0.0, 0.0, 0.0]
+    t = (edge2_x * qvec_x + edge2_y * qvec_y + edge2_z * qvec_z) * inv_det
+    if t < eps:
+        return [False, 0.0, 0.0, 0.0]
+    return [True, t, u, v]
+
+def aabb_intersect(min_a, max_a, min_b, max_b):
+    # Two 3D axis-aligned bounding boxes intersection test.
+    return (_get(min_a, 0) <= _get(max_b, 0) and _get(max_a, 0) >= _get(min_b, 0)) and \
+           (_get(min_a, 1) <= _get(max_b, 1) and _get(max_a, 1) >= _get(min_b, 1)) and \
+           (_get(min_a, 2) <= _get(max_b, 2) and _get(max_a, 2) >= _get(min_b, 2))
+
+# ---------------------------------------------------------------------------
+# Point Cloud Registration (Kabsch / ICP step)
+# ---------------------------------------------------------------------------
+
+def align_point_clouds_kabsch(source, target):
+    # Rigid registration -> [R (3x3 rotation), t (3 translation)].
+    n = source.shape[0]
+    if target.shape[0] != n or source.shape[1] != 3 or target.shape[1] != 3:
+        raise ValueError("Source and target point clouds must have matching shape [N, 3]")
+    # 1. Centroids
+    centroid_src = [0.0, 0.0, 0.0]
+    centroid_tgt = [0.0, 0.0, 0.0]
+    for i in range(n):
+        for d in range(3):
+            centroid_src[d] = centroid_src[d] + source.get([i, d])
+            centroid_tgt[d] = centroid_tgt[d] + target.get([i, d])
+    for d in range(3):
+        centroid_src[d] = centroid_src[d] / n
+        centroid_tgt[d] = centroid_tgt[d] / n
+    # 2. Cross-covariance H = P^T Q
+    h = NDArray([3, 3])
+    for i in range(n):
+        px = source.get([i, 0]) - centroid_src[0]
+        py = source.get([i, 1]) - centroid_src[1]
+        pz = source.get([i, 2]) - centroid_src[2]
+        qx = target.get([i, 0]) - centroid_tgt[0]
+        qy = target.get([i, 1]) - centroid_tgt[1]
+        qz = target.get([i, 2]) - centroid_tgt[2]
+        h.set([0, 0], h.get([0, 0]) + px * qx)
+        h.set([0, 1], h.get([0, 1]) + px * qy)
+        h.set([0, 2], h.get([0, 2]) + px * qz)
+        h.set([1, 0], h.get([1, 0]) + py * qx)
+        h.set([1, 1], h.get([1, 1]) + py * qy)
+        h.set([1, 2], h.get([1, 2]) + py * qz)
+        h.set([2, 0], h.get([2, 0]) + pz * qx)
+        h.set([2, 1], h.get([2, 1]) + pz * qy)
+        h.set([2, 2], h.get([2, 2]) + pz * qz)
+    # 3. SVD: H = U S V^T
+    u, _s, vt = _svd(h)
+    v = vt.matrix_transpose()
+    u_t = u.matrix_transpose()
+    r = matmul(v, u_t)
+    # Ensure right-handed rotation (det(R) == 1)
+    det_r = _det(r)
+    if det_r < 0:
+        for i in range(3):
+            cur = v.get([i, 2])
+            v.set([i, 2], -cur)
+        r = matmul(v, u_t)
+    # Translation: t = centroid_tgt - R * centroid_src
+    centroid_src_nd = NDArray([3, 1])
+    for d in range(3):
+        centroid_src_nd.set([d, 0], centroid_src[d])
+    r_centroid_src = matmul(r, centroid_src_nd).reshape([3])
+    t_vec = NDArray([3])
+    for d in range(3):
+        t_vec.buffer.data[t_vec.offset + d] = centroid_tgt[d] - _get(r_centroid_src, d)
+    return [r, t_vec]
+
+# ---------------------------------------------------------------------------
+# Coordinate System Conversions
+# ---------------------------------------------------------------------------
+
+def cartesian_to_spherical(x, y, z):
+    # Cartesian -> spherical -> [r, theta (azimuth), phi (inclination)].
+    r = tv.sqrt(x * x + y * y + z * z)
+    if r < 1e-15:
+        return [0.0, 0.0, 0.0]
+    theta = tv.atan2(y, x)
+    phi = tv.acos(_clamp(z / r, -1.0, 1.0))
+    return [r, theta, phi]
+
+def spherical_to_cartesian(r, theta, phi):
+    # Spherical -> Cartesian -> [x, y, z].
+    x = r * tv.sin(phi) * tv.cos(theta)
+    y = r * tv.sin(phi) * tv.sin(theta)
+    z = r * tv.cos(phi)
+    return [x, y, z]
+
+# ---------------------------------------------------------------------------
+# Hyperbolic Geometry  (Spatial/HyperbolicGeometry.cs)
+# ---------------------------------------------------------------------------
+
+def poincare_distance(u, v, c=1.0, eps=1e-7):
+    # Geodesic distance in the Poincare ball:
+    # d_c(u, v) = (2/sqrt(c)) * arcosh(1 + 2c||u-v||^2 / ((1-c||u||^2)(1-c||v||^2))).
+    if u.total_length != v.total_length:
+        raise ValueError("Vectors u and v must have the same dimension")
+    dim = u.total_length
+    norm_u_sq = 0.0
+    norm_v_sq = 0.0
+    diff_sq = 0.0
+    for i in range(dim):
+        ui = _get(u, i)
+        vi = _get(v, i)
+        d = ui - vi
+        norm_u_sq = norm_u_sq + ui * ui
+        norm_v_sq = norm_v_sq + vi * vi
+        diff_sq = diff_sq + d * d
+    max_norm_sq = (1.0 / c) - eps
+    if norm_u_sq > max_norm_sq:
+        norm_u_sq = max_norm_sq
+    if norm_v_sq > max_norm_sq:
+        norm_v_sq = max_norm_sq
+    denom = (1.0 - c * norm_u_sq) * (1.0 - c * norm_v_sq)
+    if denom < 1e-15:
+        denom = 1e-15
+    delta = 2.0 * c * diff_sq / denom
+    arg = 1.0 + delta
+    inner = arg * arg - 1.0
+    if inner < 0.0:
+        inner = 0.0
+    # arcosh(arg) = ln(arg + sqrt(arg^2 - 1))
+    arcosh = tv.log(arg + tv.sqrt(inner))
+    return arcosh / tv.sqrt(c)
+
+def mobius_addition(u, v, c=1.0):
+    # Mobius addition u (+) v on the Poincare ball with curvature c.
+    if u.total_length != v.total_length:
+        raise ValueError("Vectors u and v must have the same dimension")
+    dim = u.total_length
+    u_dot_v = 0.0
+    u_sq = 0.0
+    v_sq = 0.0
+    for i in range(dim):
+        ui = _get(u, i)
+        vi = _get(v, i)
+        u_dot_v = u_dot_v + ui * vi
+        u_sq = u_sq + ui * ui
+        v_sq = v_sq + vi * vi
+    alpha = 1.0 + 2.0 * c * u_dot_v + c * v_sq
+    beta = 1.0 - c * u_sq
+    denom = 1.0 + 2.0 * c * u_dot_v + c * c * u_sq * v_sq
+    if _abs(denom) < 1e-15:
+        denom = 1e-15
+    result = NDArray(u.shape)
+    for i in range(dim):
+        result.buffer.data[result.offset + i] = (alpha * _get(u, i) + beta * _get(v, i)) / denom
+    return result
+
+def exp_map_0(v, c=1.0):
+    # Exponential map at origin: exp_0^c(v) = tanh(sqrt(c)||v||) * v/(sqrt(c)||v||).
+    norm = 0.0
+    for i in range(v.total_length):
+        norm = norm + _get(v, i) * _get(v, i)
+    norm = tv.sqrt(norm)
+    if norm < 1e-12:
+        return v.clone()
+    sqrt_c = tv.sqrt(c)
+    scale = tv.tanh(sqrt_c * norm) / (sqrt_c * norm)
+    res = NDArray(v.shape)
+    for i in range(v.total_length):
+        res.buffer.data[res.offset + i] = _get(v, i) * scale
+    return res
+
+def log_map_0(y, c=1.0):
+    # Logarithmic map at origin: log_0^c(y) = artanh(sqrt(c)||y||) y/(sqrt(c)||y||).
+    norm = 0.0
+    for i in range(y.total_length):
+        norm = norm + _get(y, i) * _get(y, i)
+    norm = tv.sqrt(norm)
+    if norm < 1e-12:
+        return y.clone()
+    sqrt_c = tv.sqrt(c)
+    x = sqrt_c * norm
+    if x > 1.0 - 1e-12:
+        x = 1.0 - 1e-12
+    # artanh(x) = 0.5 ln((1+x)/(1-x))
+    artanh = 0.5 * tv.log((1.0 + x) / (1.0 - x))
+    scale = artanh / (sqrt_c * norm)
+    res = NDArray(y.shape)
+    for i in range(y.total_length):
+        res.buffer.data[res.offset + i] = _get(y, i) * scale
+    return res

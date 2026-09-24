@@ -1,0 +1,616 @@
+# Copyright (c) TokenVector Project. All rights reserved.
+# Licensed under the MIT License.
+#
+# TV-1001: TokenVector (`.tkv`) translation of Optimize/OptimizationAndRootFinding.cs.
+# Source of truth (C# reference implementation, 1:1 sections):
+#   RootBrentq / Bisection        -> root_brentq, bisection
+#   MinimizeBrent (golden+parabolic) -> minimize_brent
+#   MinimizeNelderMead (simplex)  -> minimize_nelder_mead
+#   MinimizeBFGS (+numeric grad)  -> minimize_bfgs
+#   LinearProgramSimplex          -> linear_program_simplex
+#   QPSolve (OSQP-style ADMM)     -> qp_solve
+#
+# Fidelity notes:
+#   - Brent's method keeps the exact tolerance arithmetic
+#     (tol1 = 2e-15*|b| + 0.5*tol) and inverse quadratic interpolation branch.
+#   - Nelder-Mead keeps alpha=1, gamma=2, rho=0.5, sigma=0.5 and the
+#     reflection -> expansion -> contraction -> shrink order.
+#   - BFGS keeps Armijo backtracking (c1 = 1e-4) and the standard
+#     H <- (I - rho s y^T) H (I - rho y s^T) + rho s s^T update.
+#   - Functions are passed as first-class callable values (TV-1001 closures).
+
+import tv
+from tv.core import NDArray
+from tv.linalg import matmul, norm, outer as _outer
+from tv.core import eye_rc as _eye_rc
+
+def _eye(n):
+    # Square identity helper (core.eye_rc takes explicit rows/cols).
+    return _eye_rc(n, n)
+
+def _zeros(shape):
+    return NDArray(shape)
+
+def _flat_get(arr, i):
+    return arr.get_flat(i)
+
+def _flat_set(arr, i, v):
+    arr.set_flat(i, v)
+
+def _abs(v):
+    if v < 0.0:
+        return -v
+    return v
+
+def _max(a, b):
+    if a > b:
+        return a
+    return b
+
+def _min(a, b):
+    if a < b:
+        return a
+    return b
+
+def _add_flat(a, b):
+    result = _zeros(a.shape)
+    for i in range(a.total_length):
+        result.buffer.data[result.offset + i] = a.buffer.data[a.offset + i] + b.buffer.data[b.offset + i]
+    return result
+
+def _sub_flat(a, b):
+    result = _zeros(a.shape)
+    for i in range(a.total_length):
+        result.buffer.data[result.offset + i] = a.buffer.data[a.offset + i] - b.buffer.data[b.offset + i]
+    return result
+
+def _scale_flat(a, s):
+    result = _zeros(a.shape)
+    for i in range(a.total_length):
+        result.buffer.data[result.offset + i] = a.buffer.data[a.offset + i] * s
+    return result
+
+def _mat_from_list(values, n):
+    # 1D vector from python-like list.
+    result = NDArray([n])
+    for i in range(n):
+        result.buffer.data[result.offset + i] = values[i]
+    return result
+
+def _get_vec(arr, i):
+    return arr.buffer.data[arr.offset + i]
+
+def _set_vec(arr, i, v):
+    arr.buffer.data[arr.offset + i] = v
+
+# ---------------------------------------------------------------------------
+# 1D Root Finding  (RootBrentq & Bisection)
+# ---------------------------------------------------------------------------
+
+def root_brentq(f, a, b, tol=1e-9, max_iter=100):
+    # Brent's method zero of f in [a, b] (brentq).
+    fa = f(a)
+    fb = f(b)
+    if fa * fb > 0:
+        raise ValueError("Root must be bracketed: f(a) and f(b) must have opposite signs")
+    if _abs(fa) < tol:
+        return a
+    if _abs(fb) < tol:
+        return b
+    c = a
+    fc = fa
+    d = b - a
+    e = d
+    for iteration in range(max_iter):
+        if fb * fc > 0:
+            c = a
+            fc = fa
+            d = b - a
+            e = d
+        if _abs(fc) < _abs(fb):
+            a, b = b, a
+            fa, fb = fb, fa
+            b, c = c, b
+            fb, fc = fc, fb
+            a, c = c, a
+            fa, fc = fc, fa
+        tol1 = 2.0 * 1e-15 * _abs(b) + 0.5 * tol
+        xm = 0.5 * (c - b)
+        if _abs(xm) <= tol1 or _abs(fb) < tol:
+            return b
+        if _abs(e) >= tol1 and _abs(fa) > _abs(fb):
+            s = fb / fa
+            if _abs(a - c) < 1e-15:
+                # Linear interpolation
+                p = 2.0 * xm * s
+                q = 1.0 - s
+            else:
+                # Inverse quadratic interpolation
+                q = fa / fc
+                r = fb / fc
+                p = s * (2.0 * xm * q * (q - r) - (b - a) * (r - 1.0))
+                q = (q - 1.0) * (r - 1.0) * (s - 1.0)
+            if p > 0:
+                q = -q
+            p = _abs(p)
+            if 2.0 * p < _min(3.0 * xm * q - _abs(tol1 * q), _abs(e * q)):
+                e = d
+                d = p / q
+            else:
+                d = xm
+                e = d
+        else:
+            d = xm
+            e = d
+        a = b
+        fa = fb
+        if _abs(d) > tol1:
+            b = b + d
+        else:
+            if xm >= 0:
+                b = b + tol1
+            else:
+                b = b - tol1
+        fb = f(b)
+    return b
+
+def bisection(f, a, b, tol=1e-9, max_iter=100):
+    # Bisection root finding in [a, b].
+    fa = f(a)
+    fb = f(b)
+    if fa * fb > 0:
+        raise ValueError("Root must be bracketed")
+    for i in range(max_iter):
+        mid = 0.5 * (a + b)
+        f_mid = f(mid)
+        if _abs(f_mid) < tol or (b - a) * 0.5 < tol:
+            return mid
+        if fa * f_mid < 0:
+            b = mid
+            fb = f_mid
+        else:
+            a = mid
+            fa = f_mid
+    return 0.5 * (a + b)
+
+# ---------------------------------------------------------------------------
+# 1D Minimization  (MinimizeBrent)
+# ---------------------------------------------------------------------------
+
+def minimize_brent(f, a, b, tol=1e-6, max_iter=100):
+    # Brent 1D minimization (golden section + parabolic interpolation).
+    gold = 0.3819660112501051  # (3 - sqrt(5)) / 2
+    x = a + gold * (b - a)
+    w = x
+    v = x
+    fx = f(x)
+    fw = fx
+    fv = fx
+    d = 0.0
+    e = 0.0
+    for iteration in range(max_iter):
+        mid = 0.5 * (a + b)
+        tol1 = 1e-10 * _abs(x) + tol
+        tol2 = 2.0 * tol1
+        if _abs(x - mid) <= (tol2 - 0.5 * (b - a)):
+            break
+        p = 0.0
+        q = 0.0
+        r = 0.0
+        if _abs(e) > tol1:
+            r = (x - w) * (fx - fv)
+            q = (x - v) * (fx - fw)
+            p = (x - v) * q - (x - w) * r
+            q = 2.0 * (q - r)
+            if q > 0:
+                p = -p
+            q = _abs(q)
+            etemp = e
+            e = d
+            if _abs(p) < _abs(0.5 * q * etemp) and p > q * (a - x) and p < q * (b - x):
+                d = p / q
+                u = x + d
+                if u - a < tol2 or b - u < tol2:
+                    if mid - x >= 0:
+                        d = tol1
+                    else:
+                        d = -tol1
+            else:
+                if x >= mid:
+                    e = a - x
+                else:
+                    e = b - x
+                d = gold * e
+        else:
+            if x >= mid:
+                e = a - x
+            else:
+                e = b - x
+            d = gold * e
+        if _abs(d) >= tol1:
+            u_new = x + d
+        else:
+            if d >= 0:
+                u_new = x + tol1
+            else:
+                u_new = x - tol1
+        fu = f(u_new)
+        if fu <= fx:
+            if u_new >= x:
+                a = x
+            else:
+                b = x
+            v = w
+            fv = fw
+            w = x
+            fw = fx
+            x = u_new
+            fx = fu
+        else:
+            if u_new < x:
+                a = u_new
+            else:
+                b = u_new
+            if fu <= fw or _abs(w - x) < 1e-15:
+                v = w
+                fv = fw
+                w = u_new
+                fw = fu
+            elif fu <= fv or _abs(v - x) < 1e-15 or _abs(v - w) < 1e-15:
+                v = u_new
+                fv = fu
+    return [x, fx]
+
+# ---------------------------------------------------------------------------
+# Multidimensional Optimization  (Nelder-Mead & BFGS)
+# ---------------------------------------------------------------------------
+
+def _sort_indices_by_values(order, f_vals):
+    for i in range(1, len(order)):
+        key = order[i]
+        j = i - 1
+        while j >= 0 and f_vals[order[j]] > f_vals[key]:
+            order[j + 1] = order[j]
+            j = j - 1
+        order[j + 1] = key
+    return order
+
+def minimize_nelder_mead(f, x0, tol=1e-6, max_iter=1000):
+    # Nelder-Mead downhill simplex (derivative-free).
+    n = x0.total_length
+    simplex = []
+    f_vals = []
+    simplex.append(x0.clone())
+    f_vals.append(f(simplex[0]))
+    for i in range(n):
+        p = x0.clone()
+        cur = _get_vec(p, i)
+        if _abs(cur) > 1e-4:
+            _set_vec(p, i, cur + 0.05 * cur)
+        else:
+            _set_vec(p, i, cur + 0.00025)
+        simplex.append(p)
+        f_vals.append(f(p))
+    alpha = 1.0
+    gamma = 2.0
+    rho = 0.5
+    sigma = 0.5
+    for iteration in range(max_iter):
+        order = []
+        for i in range(n + 1):
+            order.append(i)
+        order = _sort_indices_by_values(order, f_vals)
+        best = order[0]
+        worst = order[n]
+        second_worst = order[n - 1]
+        f_range = _abs(f_vals[worst] - f_vals[best])
+        if f_range < tol:
+            break
+        # Centroid of all vertices except worst
+        centroid = _zeros([n])
+        for i in range(n):
+            idx = order[i]
+            for d in range(n):
+                _set_vec(centroid, d, _get_vec(centroid, d) + _get_vec(simplex[idx], d))
+        for d in range(n):
+            _set_vec(centroid, d, _get_vec(centroid, d) / n)
+        # 1. Reflection
+        xr = _zeros([n])
+        for d in range(n):
+            _set_vec(xr, d, _get_vec(centroid, d) + alpha * (_get_vec(centroid, d) - _get_vec(simplex[worst], d)))
+        fxr = f(xr)
+        if fxr >= f_vals[best] and fxr < f_vals[second_worst]:
+            simplex[worst] = xr
+            f_vals[worst] = fxr
+            continue
+        # 2. Expansion
+        if fxr < f_vals[best]:
+            xe = _zeros([n])
+            for d in range(n):
+                _set_vec(xe, d, _get_vec(centroid, d) + gamma * (_get_vec(xr, d) - _get_vec(centroid, d)))
+            fxe = f(xe)
+            if fxe < fxr:
+                simplex[worst] = xe
+                f_vals[worst] = fxe
+            else:
+                simplex[worst] = xr
+                f_vals[worst] = fxr
+            continue
+        # 3. Contraction
+        xc = _zeros([n])
+        for d in range(n):
+            _set_vec(xc, d, _get_vec(centroid, d) + rho * (_get_vec(simplex[worst], d) - _get_vec(centroid, d)))
+        fxc = f(xc)
+        if fxc < f_vals[worst]:
+            simplex[worst] = xc
+            f_vals[worst] = fxc
+            continue
+        # 4. Shrink
+        for i in range(1, n + 1):
+            idx = order[i]
+            for d in range(n):
+                _set_vec(simplex[idx], d, _get_vec(simplex[best], d) + sigma * (_get_vec(simplex[idx], d) - _get_vec(simplex[best], d)))
+            f_vals[idx] = f(simplex[idx])
+    min_idx = 0
+    for i in range(1, n + 1):
+        if f_vals[i] < f_vals[min_idx]:
+            min_idx = i
+    return [simplex[min_idx], f_vals[min_idx]]
+
+def approximate_gradient(f, x, eps=1e-7):
+    # Central-difference gradient approximation.
+    n = x.total_length
+    g = _zeros([n])
+    xp = x.clone()
+    for i in range(n):
+        orig = _get_vec(xp, i)
+        _set_vec(xp, i, orig + eps)
+        f_plus = f(xp)
+        _set_vec(xp, i, orig - eps)
+        f_minus = f(xp)
+        _set_vec(xp, i, orig)
+        _set_vec(g, i, (f_plus - f_minus) / (2.0 * eps))
+    return g
+
+def minimize_bfgs(f, grad, x0, tol=1e-6, max_iter=200):
+    # BFGS quasi-Newton optimization with Armijo backtracking line search.
+    n = x0.total_length
+    x = x0.clone()
+    h = _eye(n)
+    if grad is None:
+        grad = lambda pt: approximate_gradient(f, pt)
+    g = grad(x)
+    for iteration in range(max_iter):
+        if norm(g, "2") < tol:
+            break
+        # Search direction p = -H * g
+        p = _scale_flat(matmul(h, g.reshape([n, 1])).reshape([n]), -1.0)
+        # Backtracking line search (Armijo)
+        alpha = 1.0
+        c1 = 1e-4
+        fx = f(x)
+        slope = 0.0
+        for i in range(n):
+            slope = slope + _get_vec(g, i) * _get_vec(p, i)
+        while f(_add_flat(x, _scale_flat(p, alpha))) > fx + c1 * alpha * slope and alpha > 1e-8:
+            alpha = alpha * 0.5
+        s = _scale_flat(p, alpha)
+        x_next = _add_flat(x, s)
+        g_next = grad(x_next)
+        y = _sub_flat(g_next, g)
+        # Update H using the BFGS formula
+        ys = 0.0
+        for i in range(n):
+            ys = ys + _get_vec(y, i) * _get_vec(s, i)
+        if _abs(ys) > 1e-14:
+            rho_v = 1.0 / ys
+            identity = _eye(n)
+            sy_t = _outer(s, y)
+            y_ts = _outer(y, s)
+            term1 = _sub_flat(identity, _scale_flat(sy_t, rho_v))
+            term2 = _sub_flat(identity, _scale_flat(y_ts, rho_v))
+            ss_t = _scale_flat(_outer(s, s), rho_v)
+            h = _add_flat(matmul(matmul(term1, h), term2), ss_t)
+        x = x_next
+        g = g_next
+    return [x, f(x)]
+
+# ---------------------------------------------------------------------------
+# Linear Programming  (LinearProgramSimplex)
+# ---------------------------------------------------------------------------
+
+def linear_program_simplex(c, a_mat, b_vec, max_iter=500):
+    # Minimize c^T x s.t. A x <= b, x >= 0 -> [x_opt, min_value].
+    m = a_mat.shape[0]
+    n = a_mat.shape[1]
+    tab = _zeros([m + 1, n + m + 1])
+    for i in range(m):
+        for j in range(n):
+            tab.set([i, j], a_mat.get([i, j]))
+        tab.set([i, n + i], 1.0)   # slack variable
+        tab.set([i, n + m], b_vec.buffer.data[b_vec.offset + i])  # RHS
+    for j in range(n):
+        tab.set([m, j], -c.buffer.data[c.offset + j])  # objective row
+    basis = []
+    for i in range(m):
+        basis.append(n + i)
+    for iteration in range(max_iter):
+        # Entering column (most negative bottom row entry)
+        enter_col = -1
+        min_coeff = -1e-9
+        for j in range(n + m):
+            if tab.get([m, j]) < min_coeff:
+                min_coeff = tab.get([m, j])
+                enter_col = j
+        if enter_col == -1:
+            break  # optimal
+        # Leaving row (minimum positive ratio test)
+        leave_row = -1
+        min_ratio = 1.7976931348623157e308
+        for i in range(m):
+            if tab.get([i, enter_col]) > 1e-12:
+                ratio = tab.get([i, n + m]) / tab.get([i, enter_col])
+                if ratio < min_ratio:
+                    min_ratio = ratio
+                    leave_row = i
+        if leave_row == -1:
+            raise ValueError("Linear program is unbounded")
+        # Pivot on (leave_row, enter_col)
+        basis[leave_row] = enter_col
+        pivot = tab.get([leave_row, enter_col])
+        for j in range(n + m + 1):
+            tab.set([leave_row, j], tab.get([leave_row, j]) / pivot)
+        for i in range(m + 1):
+            if i != leave_row:
+                factor = tab.get([i, enter_col])
+                for j in range(n + m + 1):
+                    tab.set([i, j], tab.get([i, j]) - factor * tab.get([leave_row, j]))
+    x_opt = _zeros([n])
+    for i in range(m):
+        if basis[i] < n:
+            _set_vec(x_opt, basis[i], tab.get([i, n + m]))
+    opt_val = tab.get([m, n + m])
+    return [x_opt, opt_val]
+
+# ---------------------------------------------------------------------------
+# Quadratic Programming  (QPSolve, OSQP-style ADMM)
+# ---------------------------------------------------------------------------
+
+def qp_solve(p_mat, q_vec, g_mat=None, h_vec=None, a_mat=None, b_vec=None,
+             lb=None, ub=None, rho=1.0, sigma=1e-6, tol=1e-5, max_iter=1000):
+    # Convex QP via operator-splitting ADMM:
+    #   min 0.5 x^T P x + q^T x  s.t.  Gx<=h, Ax==b, lb<=x<=ub.
+    if p_mat.rank() != 2 or p_mat.shape[0] != p_mat.shape[1]:
+        raise ValueError("P matrix must be square 2D")
+    n = p_mat.shape[0]
+    if q_vec.total_length != n:
+        raise ValueError("q vector length must match P dimension")
+    neg_inf = -1.7976931348623157e308
+    pos_inf = 1.7976931348623157e308
+
+    constraint_rows = []
+    l_list = []
+    u_list = []
+    # 1. Equality constraints A x == b
+    if a_mat is not None and b_vec is not None:
+        m_a = a_mat.shape[0]
+        for i in range(m_a):
+            row = []
+            for j in range(n):
+                row.append(a_mat.get([i, j]))
+            constraint_rows.append(row)
+            l_list.append(b_vec.buffer.data[b_vec.offset + i])
+            u_list.append(b_vec.buffer.data[b_vec.offset + i])
+    # 2. Inequality constraints G x <= h
+    if g_mat is not None and h_vec is not None:
+        m_g = g_mat.shape[0]
+        for i in range(m_g):
+            row = []
+            for j in range(n):
+                row.append(g_mat.get([i, j]))
+            constraint_rows.append(row)
+            l_list.append(neg_inf)
+            u_list.append(h_vec.buffer.data[h_vec.offset + i])
+    # 3. Box bounds lb <= x <= ub
+    if lb is not None or ub is not None:
+        for i in range(n):
+            row = []
+            for j in range(n):
+                row.append(0.0)
+            row[i] = 1.0
+            constraint_rows.append(row)
+            if lb is not None:
+                l_list.append(lb.buffer.data[lb.offset + i])
+            else:
+                l_list.append(neg_inf)
+            if ub is not None:
+                u_list.append(ub.buffer.data[ub.offset + i])
+            else:
+                u_list.append(pos_inf)
+    if len(constraint_rows) == 0:
+        for i in range(n):
+            row = []
+            for j in range(n):
+                row.append(0.0)
+            row[i] = 1.0
+            constraint_rows.append(row)
+            l_list.append(neg_inf)
+            u_list.append(pos_inf)
+
+    m_total = len(constraint_rows)
+    c_mat = _zeros([m_total, n])
+    l_vec = _zeros([m_total])
+    u_vec = _zeros([m_total])
+    for i in range(m_total):
+        for j in range(n):
+            c_mat.set([i, j], constraint_rows[i][j])
+        _set_vec(l_vec, i, l_list[i])
+        _set_vec(u_vec, i, u_list[i])
+
+    c_t = c_mat.matrix_transpose()
+    # System matrix K = P + sigma*I + rho * C^T C
+    k = p_mat.clone()
+    for i in range(n):
+        cur = k.get([i, i])
+        k.set([i, i], cur + sigma)
+    ctc = matmul(c_t, c_mat)
+    k = _add_flat(k, _scale_flat(ctc, rho))
+
+    p_k, l_k, u_k = tv.linalg.lu(k)
+
+    x = _zeros([n])
+    z = _zeros([m_total])
+    y = _zeros([m_total])
+    for iteration in range(max_iter):
+        # rhs = sigma * x - q + C^T (rho z - y)
+        rho_z_minus_y = _zeros([m_total, 1])
+        for i in range(m_total):
+            rho_z_minus_y.set([i, 0], rho * _get_vec(z, i) - _get_vec(y, i))
+        ct_term = matmul(c_t, rho_z_minus_y)
+        rhs = _zeros([n, 1])
+        for i in range(n):
+            rhs.set([i, 0], sigma * _get_vec(x, i) - _get_vec(q_vec, i) + ct_term.get([i, 0]))
+        # Solve K x_next = rhs via precomputed LU
+        pb = matmul(p_k, rhs)
+        y_temp = _zeros([n, 1])
+        for i in range(n):
+            sum_v = 0.0
+            for j in range(i):
+                sum_v = sum_v + l_k.get([i, j]) * y_temp.get([j, 0])
+            y_temp.set([i, 0], pb.get([i, 0]) - sum_v)
+        x_next = _zeros([n])
+        for i in range(n - 1, -1, -1):
+            sum_v = 0.0
+            for j in range(i + 1, n):
+                sum_v = sum_v + u_k.get([i, j]) * _get_vec(x_next, j)
+            _set_vec(x_next, i, (y_temp.get([i, 0]) - sum_v) / u_k.get([i, i]))
+        # zNext = clamp(C xNext + y / rho, l, u)
+        c_x = matmul(c_mat, x_next.reshape([n, 1]))
+        z_next = _zeros([m_total])
+        prim_res = 0.0
+        for i in range(m_total):
+            val = c_x.get([i, 0]) + _get_vec(y, i) / rho
+            clamped = val
+            if clamped < _get_vec(l_vec, i):
+                clamped = _get_vec(l_vec, i)
+            if clamped > _get_vec(u_vec, i):
+                clamped = _get_vec(u_vec, i)
+            _set_vec(z_next, i, clamped)
+            diff = c_x.get([i, 0]) - clamped
+            prim_res = _max(prim_res, _abs(diff))
+        # yNext = y + rho * (C xNext - zNext)
+        dual_res = 0.0
+        for i in range(m_total):
+            diff_z = _get_vec(z_next, i) - _get_vec(z, i)
+            dual_res = _max(dual_res, _abs(rho * diff_z))
+            _set_vec(y, i, _get_vec(y, i) + rho * (c_x.get([i, 0]) - _get_vec(z_next, i)))
+        x = x_next
+        z = z_next
+        if prim_res < tol and dual_res < tol:
+            break
+    # Objective: 0.5 x^T P x + q^T x
+    p_x = matmul(p_mat, x.reshape([n, 1]))
+    obj = 0.0
+    for i in range(n):
+        obj = obj + 0.5 * _get_vec(x, i) * p_x.get([i, 0]) + _get_vec(q_vec, i) * _get_vec(x, i)
+    return [x, obj]

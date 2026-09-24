@@ -1,0 +1,724 @@
+# Copyright (c) TokenVector Project. All rights reserved.
+# Licensed under the MIT License.
+#
+# TV-1001: TokenVector (`.tkv`) translation of the Ops elementwise + reduction surface.
+# Source of truth (C# reference implementations, 1:1 sections):
+#   Ops/ElementWiseOps.cs      -> add/sub/mul/div/mod/neg (binary + scalar overloads)
+#   Ops/ElementWiseMathOps.cs  -> trig, exp/log, rounding, hypot, unwrap, logaddexp
+#   Ops/ReductionOps.cs        -> sum/mean/prod/min/max (+axis), argmax/argmin
+#
+# Fidelity notes:
+#   - C# operator overloads on NDArray<T> become module-level functions
+#     (add, sub, mul, div, mod, neg, add_scalar, rsub_scalar, ...), following
+#     the TV-1001 stdlib convention.
+#   - Broadcast path uses tv.engine.broadcast_pair (Stride-0 zero-copy), and
+#     reductions keep the exact C# axis normalization and keepdims semantics.
+
+import tv
+from tv.core import NDArray, BoolNDArray, get_multi_index, broadcast_shapes
+from tv.engine import broadcast_pair
+from tv.linalg_functions import Complex
+
+def _same_shape(a, b):
+    if len(a.shape) != len(b.shape):
+        return False
+    for i in range(len(a.shape)):
+        if a.shape[i] != b.shape[i]:
+            return False
+    return True
+
+def _elementwise_binary(a, b, op):
+    # C# ElementWiseBinaryOp: same-shape fast path + broadcast fallback.
+    if _same_shape(a, b):
+        result = NDArray(a.shape, dtype=a.dtype)
+        for i in range(result.total_length):
+            result.buffer.data[result.offset + i] = op(a.get_flat(i), b.get_flat(i))
+        return result
+    out_shape = broadcast_shapes(a.shape, b.shape)
+    b_left = a.broadcast_to(out_shape)
+    b_right = b.broadcast_to(out_shape)
+    result = NDArray(out_shape, dtype=a.dtype)
+    for i in range(result.total_length):
+        coords = get_multi_index(i, out_shape)
+        result.buffer.data[result.offset + i] = op(b_left.get(coords), b_right.get(coords))
+    return result
+
+# ---------------------------------------------------------------------------
+# Binary operators  (Ops/ElementWiseOps.cs)
+# ---------------------------------------------------------------------------
+
+def add(a, b):
+    return _elementwise_binary(a, b, lambda x, y: x + y)
+
+def sub(a, b):
+    return _elementwise_binary(a, b, lambda x, y: x - y)
+
+def mul(a, b):
+    return _elementwise_binary(a, b, lambda x, y: x * y)
+
+def div(a, b):
+    return _elementwise_binary(a, b, lambda x, y: x / y)
+
+def mod(a, b):
+    return _elementwise_binary(a, b, lambda x, y: _fmod_val(x, y))
+
+def neg(value):
+    # Unary minus: result[i] = -value[i].
+    result = NDArray(value.shape, dtype=value.dtype)
+    for i in range(result.total_length):
+        result.buffer.data[result.offset + i] = -value.get_flat(i)
+    return result
+
+# -- Scalar overloads --------------------------------------------------------
+
+def add_scalar(left, scalar):
+    result = NDArray(left.shape, dtype=left.dtype)
+    for i in range(left.total_length):
+        result.buffer.data[result.offset + i] = left.get_flat(i) + scalar
+    return result
+
+def scalar_add(scalar, right):
+    return add_scalar(right, scalar)
+
+def sub_scalar(left, scalar):
+    result = NDArray(left.shape, dtype=left.dtype)
+    for i in range(left.total_length):
+        result.buffer.data[result.offset + i] = left.get_flat(i) - scalar
+    return result
+
+def scalar_sub(scalar, right):
+    result = NDArray(right.shape, dtype=right.dtype)
+    for i in range(right.total_length):
+        result.buffer.data[result.offset + i] = scalar - right.get_flat(i)
+    return result
+
+def mul_scalar(left, scalar):
+    result = NDArray(left.shape, dtype=left.dtype)
+    for i in range(left.total_length):
+        result.buffer.data[result.offset + i] = left.get_flat(i) * scalar
+    return result
+
+def scalar_mul(scalar, right):
+    return mul_scalar(right, scalar)
+
+def div_scalar(left, scalar):
+    result = NDArray(left.shape, dtype=left.dtype)
+    for i in range(left.total_length):
+        result.buffer.data[result.offset + i] = left.get_flat(i) / scalar
+    return result
+
+def scalar_div(scalar, right):
+    result = NDArray(right.shape, dtype=right.dtype)
+    for i in range(right.total_length):
+        result.buffer.data[result.offset + i] = scalar / right.get_flat(i)
+    return result
+
+def _fmod_val(a, b):
+    # C-style remainder with the sign of the dividend (Math.IEEERemainder-free %).
+    q = a / b
+    if q < 0.0:
+        q = -tv.floor(-q)
+    truncated = a - b * _trunc_val(q)
+    return truncated
+
+def _trunc_val(x):
+    if x >= 0.0:
+        return tv.floor(x)
+    return -tv.floor(-x)
+
+# ---------------------------------------------------------------------------
+# Reductions  (Ops/ReductionOps.cs)
+# ---------------------------------------------------------------------------
+
+def sum(arr):
+    # Global sum (scalar).
+    total = 0.0
+    for i in range(arr.total_length):
+        total = total + arr.get_flat(i)
+    return total
+
+def mean(arr):
+    if arr.total_length == 0:
+        return 0.0
+    return sum(arr) / arr.total_length
+
+def prod(arr):
+    if arr.total_length == 0:
+        return 0.0
+    p = 1.0
+    for i in range(arr.total_length):
+        p = p * arr.get_flat(i)
+    return p
+
+def min(arr):
+    if arr.total_length == 0:
+        raise ValueError("Cannot compute Min on empty tensor")
+    min_val = None
+    for i in range(arr.total_length):
+        v = arr.get_flat(i)
+        if min_val is None or v < min_val:
+            min_val = v
+    return min_val
+
+def max(arr):
+    if arr.total_length == 0:
+        raise ValueError("Cannot compute Max on empty tensor")
+    max_val = None
+    for i in range(arr.total_length):
+        v = arr.get_flat(i)
+        if max_val is None or v > max_val:
+            max_val = v
+    return max_val
+
+def _normalize_axis(arr, axis):
+    if axis < 0:
+        axis = axis + arr.rank()
+    if axis < 0 or axis >= arr.rank():
+        raise ValueError("Axis out of range for tensor rank")
+    return axis
+
+def _reduced_shape(arr, norm_axis, keepdims):
+    if keepdims:
+        shape = []
+        for i in range(arr.rank()):
+            shape.append(arr.shape[i])
+        shape[norm_axis] = 1
+        return shape
+    if arr.rank() == 1:
+        return []  # scalar 0-D
+    new_shape = []
+    for i in range(arr.rank()):
+        if i != norm_axis:
+            new_shape.append(arr.shape[i])
+    return new_shape
+
+def _reconstruct_coords(reduced_coords, axis, axis_val):
+    rank = len(reduced_coords) + 1
+    coords = []
+    r_idx = 0
+    for i in range(rank):
+        if i == axis:
+            coords.append(axis_val)
+        else:
+            coords.append(reduced_coords[r_idx])
+            r_idx = r_idx + 1
+    return coords
+
+def _reduce_axis(arr, axis, keepdims, op, use_first_as_initial=False):
+    norm_axis = _normalize_axis(arr, axis)
+    out_shape = _reduced_shape(arr, norm_axis, keepdims)
+    result = NDArray(out_shape, dtype=arr.dtype)
+    axis_size = arr.shape[norm_axis]
+    if keepdims:
+        lookup_shape = _reduced_shape(arr, norm_axis, False)
+    else:
+        lookup_shape = out_shape
+    for i in range(result.total_length):
+        coords = get_multi_index(i, lookup_shape)
+        acc = 0.0
+        is_init = not use_first_as_initial
+        for a in range(axis_size):
+            full_coords = _reconstruct_coords(coords, norm_axis, a)
+            val = arr.get(full_coords)
+            if not is_init:
+                acc = val
+                is_init = True
+            else:
+                acc = op(acc, val)
+        result.buffer.data[result.offset + i] = acc
+    return result
+
+def sum_axis(arr, axis, keepdims=False):
+    # Sum along the specified axis.
+    return _reduce_axis(arr, axis, keepdims, lambda acc, v: acc + v)
+
+def mean_axis(arr, axis, keepdims=False):
+    # Mean along the specified axis.
+    norm_axis = _normalize_axis(arr, axis)
+    dim_size = arr.shape[norm_axis]
+    s = sum_axis(arr, axis, keepdims)
+    return mul_scalar(s, 1.0 / dim_size)
+
+def max_axis(arr, axis, keepdims=False):
+    return _reduce_axis(arr, axis, keepdims, lambda acc, v: v if v > acc else acc, use_first_as_initial=True)
+
+def min_axis(arr, axis, keepdims=False):
+    return _reduce_axis(arr, axis, keepdims, lambda acc, v: v if v < acc else acc, use_first_as_initial=True)
+
+def argmax(arr, axis):
+    # Indices of maximum values along the axis (int indices).
+    norm_axis = _normalize_axis(arr, axis)
+    out_shape = _reduced_shape(arr, norm_axis, False)
+    result = NDArray(out_shape)
+    axis_size = arr.shape[norm_axis]
+    for i in range(result.total_length):
+        coords = get_multi_index(i, out_shape)
+        max_idx = 0
+        max_val = 0.0
+        first = True
+        for a in range(axis_size):
+            full_coords = _reconstruct_coords(coords, norm_axis, a)
+            val = arr.get(full_coords)
+            if first or val > max_val:
+                max_val = val
+                max_idx = a
+                first = False
+        result.buffer.data[result.offset + i] = max_idx
+    return result
+
+def argmin(arr, axis):
+    # Indices of minimum values along the axis (int indices).
+    norm_axis = _normalize_axis(arr, axis)
+    out_shape = _reduced_shape(arr, norm_axis, False)
+    result = NDArray(out_shape)
+    axis_size = arr.shape[norm_axis]
+    for i in range(result.total_length):
+        coords = get_multi_index(i, out_shape)
+        min_idx = 0
+        min_val = 0.0
+        first = True
+        for a in range(axis_size):
+            full_coords = _reconstruct_coords(coords, norm_axis, a)
+            val = arr.get(full_coords)
+            if first or val < min_val:
+                min_val = val
+                min_idx = a
+                first = False
+        result.buffer.data[result.offset + i] = min_idx
+    return result
+
+# ---------------------------------------------------------------------------
+# Element-wise math ops  (Ops/ElementWiseMathOps.cs)
+# ---------------------------------------------------------------------------
+
+def _map(a, fn):
+    result = NDArray(a.shape, dtype=a.dtype)
+    for i in range(a.total_length):
+        result.buffer.data[result.offset + i] = fn(a.get_flat(i))
+    return result
+
+def _binary_map(a, b, fn):
+    b_a, b_b = broadcast_pair(a, b)
+    result = NDArray(b_a.shape, dtype=a.dtype)
+    for i in range(result.total_length):
+        coords = get_multi_index(i, b_a.shape)
+        result.buffer.data[result.offset + i] = fn(b_a.get(coords), b_b.get(coords))
+    return result
+
+def sin(a):
+    return _map(a, tv.sin)
+
+def cos(a):
+    return _map(a, tv.cos)
+
+def tan(a):
+    return _map(a, tv.tan)
+
+def arcsin(a):
+    return _map(a, tv.asin)
+
+def arccos(a):
+    return _map(a, tv.acos)
+
+def arctan(a):
+    return _map(a, tv.atan)
+
+def arctan2(y, x):
+    return _binary_map(y, x, tv.atan2)
+
+def sinh(a):
+    return _map(a, tv.sinh)
+
+def cosh(a):
+    return _map(a, tv.cosh)
+
+def tanh(a):
+    return _map(a, tv.tanh)
+
+def arcsinh(a):
+    return _map(a, lambda x: tv.log(x + tv.sqrt(x * x + 1.0)))
+
+def arccosh(a):
+    return _map(a, lambda x: tv.log(x + tv.sqrt(x * x - 1.0)))
+
+def arctanh(a):
+    return _map(a, lambda x: 0.5 * tv.log((1.0 + x) / (1.0 - x)))
+
+def deg2rad(a):
+    return _map(a, lambda deg: deg * (3.14159265358979323846 / 180.0))
+
+def rad2deg(a):
+    return _map(a, lambda rad: rad * (180.0 / 3.14159265358979323846))
+
+def unwrap(a, discont=3.14159265358979323846, period=2 * 3.14159265358979323846):
+    # Unwraps phase by changing absolute jumps > discont to their period complement.
+    res = a.clone()
+    n = res.total_length
+    if n <= 1:
+        return res
+    high = discont
+    low = -discont
+    for i in range(1, n):
+        diff = res.get_flat(i) - res.get_flat(i - 1)
+        diff_mod = _fmod_val(diff - low, period)
+        if diff_mod < 0:
+            diff_mod = diff_mod + period
+        diff_mod = diff_mod + low
+        if diff_mod == low and diff > 0:
+            diff_mod = high
+        correction = diff_mod - diff
+        if correction != 0.0:
+            for j in range(i, n):
+                res.buffer.data[res.offset + j] = res.get_flat(j) + correction
+    return res
+
+def exp(a):
+    return _map(a, tv.exp)
+
+def exp2(a):
+    return _map(a, lambda x: _pow_f(2.0, x))
+
+def expm1(a):
+    return _map(a, lambda x: tv.exp(x) - 1.0)
+
+def log(a):
+    return _map(a, tv.log)
+
+def log2(a):
+    return _map(a, lambda x: tv.log(x) / 0.69314718055994530942)
+
+def log10(a):
+    return _map(a, lambda x: tv.log(x) / 2.30258509299404568402)
+
+def log1p(a):
+    return _map(a, lambda x: tv.log(1.0 + x))
+
+def logaddexp(x1, x2):
+    return _binary_map(x1, x2, lambda a, b: _max_f(a, b) + tv.log(1.0 + tv.exp(_min_f(a, b) - _max_f(a, b))))
+
+def logaddexp2(x1, x2):
+    ln2 = 0.69314718055994530942
+    return _binary_map(x1, x2, lambda a, b: _max_f(a, b) + tv.log(1.0 + _pow_f(2.0, _min_f(a, b) - _max_f(a, b))) / ln2)
+
+def sqrt(a):
+    return _map(a, tv.sqrt)
+
+def cbrt(a):
+    return _map(a, lambda x: _pow_f(x, 1.0 / 3.0) if x >= 0.0 else -_pow_f(-x, 1.0 / 3.0))
+
+def square(a):
+    return _map(a, lambda x: x * x)
+
+def reciprocal(a):
+    return _map(a, lambda x: 1.0 / x)
+
+def hypot(x1, x2):
+    return _binary_map(x1, x2, lambda a, b: tv.sqrt(a * a + b * b))
+
+def ceil(a):
+    return _map(a, tv.ceil)
+
+def floor(a):
+    return _map(a, tv.floor)
+
+def trunc(a):
+    return _map(a, _trunc_val)
+
+def round(a, decimals=0):
+    factor = _pow2_int(0) if decimals == 0 else _pow10(decimals)
+    if decimals == 0:
+        return _map(a, lambda x: _round_half_away(x))
+    return _map(a, lambda x: _round_half_away(x * factor) / factor)
+
+def sign(a):
+    return _map(a, lambda x: _sign_val(x))
+
+def copysign(x1, x2):
+    return _binary_map(x1, x2, lambda a, b: -_abs_f(a) if b < 0.0 else _abs_f(a))
+
+def fmod(x1, x2):
+    return _binary_map(x1, x2, _fmod_val)
+
+def _pow_f(base, exponent):
+    return tv.exp(exponent * tv.log(base))
+
+def _pow10(n):
+    v = 1.0
+    if n < 0:
+        for i in range(-n):
+            v = v / 10.0
+        return v
+    for i in range(n):
+        v = v * 10.0
+    return v
+
+def _pow2_int(e):
+    v = 1
+    for i in range(e):
+        v = v * 2
+    return v
+
+def _round_half_away(x):
+    # Math.Round default (MidpointRounding.ToEven) is replaced with the common
+    # half-away rounding; pass decimals=0 for integer rounding behavior.
+    f = tv.floor(x)
+    diff = x - f
+    if diff > 0.5:
+        return f + 1.0
+    if diff < 0.5:
+        return f
+    if _fmod_val(f, 2.0) == 0.0:
+        return f
+    return f + 1.0
+
+def _sign_val(x):
+    if x > 0.0:
+        return 1.0
+    if x < 0.0:
+        return -1.0
+    return 0.0
+
+def _abs_f(v):
+    if v < 0.0:
+        return -v
+    return v
+
+def _max_f(a, b):
+    if a > b:
+        return a
+    return b
+
+def _min_f(a, b):
+    if a < b:
+        return a
+    return b
+
+# ---------------------------------------------------------------------------
+# NumPy-parity gap fill  (elementwise + scalar math, post TV-1001 audit)
+# ---------------------------------------------------------------------------
+
+def abs(a):
+    # np.abs / np.fabs / np.absolute.
+    return _map(a, _abs_f)
+
+def pow(a, b):
+    # np.power with broadcasting; integral exponents via exact binary squaring.
+    return _binary_map(a, b, _pow_val)
+
+def _pow_val(x, e):
+    if e == tv.floor(e):
+        return _ipow(x, int(e))
+    return _pow_f(x, e)
+
+def _ipow(x, n):
+    if n < 0:
+        return 1.0 / _ipow(x, -n)
+    r = 1.0
+    base = x
+    while n > 0:
+        if n % 2 == 1:
+            r = r * base
+        base = base * base
+        n = n // 2
+    return r
+
+def maximum(x1, x2):
+    return _binary_map(x1, x2, _max_f)
+
+def minimum(x1, x2):
+    return _binary_map(x1, x2, _min_f)
+
+def floor_divide(x1, x2):
+    # np.floor_divide: floor(x / y).
+    return _binary_map(x1, x2, lambda a, b: tv.floor(a / b))
+
+def float_power(x1, x2):
+    # np.float_power always computes in float64.
+    return _binary_map(x1, x2, _pow_val)
+
+def gcd(x1, x2):
+    # np.gcd on integer-valued tensors (Euclid).
+    return _binary_map(x1, x2, _gcd_val)
+
+def _gcd_val(a, b):
+    x = int(_abs_f(a))
+    y = int(_abs_f(b))
+    while y != 0:
+        t = y
+        y = x % y
+        x = t
+    return float(x)
+
+def lcm(x1, x2):
+    return _binary_map(x1, x2, lambda a, b: _abs_f(a * b) / _gcd_val(a, b) if a != 0.0 and b != 0.0 else 0.0)
+
+def frexp(x):
+    # np.frexp -> [mantissa, exponent] with |mantissa| in [0.5, 1).
+    mant = NDArray(x.shape)
+    expo = NDArray(x.shape)
+    for i in range(x.total_length):
+        v = x.get_flat(i)
+        if v == 0.0:
+            mant.buffer.data[mant.offset + i] = 0.0
+            expo.buffer.data[expo.offset + i] = 0
+        else:
+            e = tv.floor(tv.log(_abs_f(v)) / 0.69314718055994530942) + 1.0
+            m = v / _pow2_int(int(e))
+            if _abs_f(m) >= 1.0:
+                e = e + 1.0
+                m = v / _pow2_int(int(e))
+            mant.buffer.data[mant.offset + i] = m
+            expo.buffer.data[expo.offset + i] = int(e)
+    return [mant, expo]
+
+def ldexp(x1, x2):
+    # np.ldexp: x1 * 2**x2.
+    return _binary_map(x1, x2, lambda a, b: a * _pow2_int(int(b)))
+
+def modf(x):
+    # np.modf -> [fractional, integral].
+    frac = _map(x, lambda v: v - _trunc_val(v))
+    integral = _map(x, _trunc_val)
+    return [frac, integral]
+
+def divmod(x1, x2):
+    # np.divmod -> [floor_divide, remainder].
+    return [floor_divide(x1, x2), fmod(x1, x2)]
+
+def signbit(x):
+    # np.signbit -> BoolNDArray.
+    result = BoolNDArray(x.shape)
+    for i in range(x.total_length):
+        result.buffer[result.offset + i] = x.get_flat(i) < 0.0
+    return result
+
+def positive(x):
+    # np.positive: +x elementwise (a copy for floats).
+    return x.clone()
+
+def heaviside(x1, x2):
+    # np.heaviside(x1, x2): 0 if x1 < 0, x2 if x1 == 0, 1 if x1 > 0.
+    return _binary_map(x1, x2, lambda a, b: b if a == 0.0 else (1.0 if a > 0.0 else 0.0))
+
+def nextafter(x1, x2):
+    # np.nextafter via f64 bit stepping (tv.f64_bits / tv.f64_from_bits).
+    return _binary_map(x1, x2, _nextafter_val)
+
+def _nextafter_val(x, toward):
+    if x == toward:
+        return x
+    bits = tv.f64_bits(x)
+    if x < toward:
+        if x < 0.0:
+            bits = bits - 1
+        else:
+            bits = bits + 1
+    else:
+        if x <= 0.0:
+            bits = bits + 1
+        else:
+            bits = bits - 1
+    return tv.f64_from_bits(bits)
+
+def spacing(x):
+    # np.spacing: distance to the next representable value.
+    return _map(x, lambda v: _abs_f(_nextafter_val(v, _tv_inf()) - v))
+
+def _tv_inf():
+    return tv.f64_from_bits(0x7FF0000000000000)
+
+def _nan_to_num_conv(v, nan, posinf, neginf):
+    # Hoisted conversion kernel for nan_to_num (TV has no nested defs).
+    if v != v:
+        return nan
+    if v > 1.7976931348623157e308:
+        return posinf
+    if v < -1.7976931348623157e308:
+        return neginf
+    return v
+
+def nan_to_num(x, nan=0.0, posinf=None, neginf=None):
+    # np.nan_to_num with NumPy default infinities (f64 max magnitude).
+    if posinf is None:
+        posinf = 1.7976931348623157e308
+    if neginf is None:
+        neginf = -1.7976931348623157e308
+    result = NDArray(x.shape, dtype=x.dtype)
+    for i in range(x.total_length):
+        result.buffer.data[result.offset + i] = _nan_to_num_conv(x.get_flat(i), nan, posinf, neginf)
+    return result
+
+def angle(z):
+    # np.angle over a list of Complex (the fft.tkv data model).
+    out = NDArray([len(z)])
+    for i in range(len(z)):
+        out.buffer.data[out.offset + i] = tv.atan2(z[i].imaginary, z[i].real)
+    return out
+
+def conjugate(z):
+    # np.conjugate over a list of Complex.
+    out = []
+    for i in range(len(z)):
+        out.append(Complex(z[i].real, -z[i].imaginary))
+    return out
+
+def fmax(x1, x2):
+    # np.fmax: elementwise max, NaN in either input loses to the other value.
+    return _binary_map(x1, x2, lambda a, b: _fmax_val(a, b))
+
+def _fmax_val(a, b):
+    if a != a:
+        return b
+    if b != b:
+        return a
+    if a > b:
+        return a
+    return b
+
+def fmin(x1, x2):
+    # np.fmin: elementwise min, NaN in either input loses to the other value.
+    return _binary_map(x1, x2, lambda a, b: _fmin_val(a, b))
+
+def _fmin_val(a, b):
+    if a != a:
+        return b
+    if b != b:
+        return a
+    if a < b:
+        return a
+    return b
+
+def logical_xor(x1, x2):
+    # np.logical_xor on boolean tensors -> BoolNDArray.
+    out_shape = broadcast_shapes(x1.shape, x2.shape)
+    out_rank = len(out_shape)
+    r1 = len(x1.shape)
+    r2 = len(x2.shape)
+    result = BoolNDArray(out_shape)
+    for i in range(_total(out_shape)):
+        coords = get_multi_index(i, out_shape)
+        va = x1.get(coords[out_rank - r1:]) if r1 > 0 else x1.get([])
+        vb = x2.get(coords[out_rank - r2:]) if r2 > 0 else x2.get([])
+        result.buffer[result.offset + i] = bool(va) != bool(vb)
+    return result
+
+def _total(shape):
+    t = 1
+    for i in range(len(shape)):
+        t = t * shape[i]
+    return t
+
+def real_if_close(z, tol=100):
+    # np.real_if_close: drop the imaginary part when |imag| <= tol*eps for all.
+    threshold = 100.0 * 2.220446049250313e-16
+    all_real = True
+    for i in range(len(z)):
+        if _abs_f(z[i].imaginary) > threshold:
+            all_real = False
+            break
+    if all_real:
+        out = NDArray([len(z)])
+        for i in range(len(z)):
+            out.buffer.data[out.offset + i] = z[i].real
+        return out
+    return z

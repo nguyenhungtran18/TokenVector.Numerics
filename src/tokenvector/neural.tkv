@@ -1,0 +1,498 @@
+# Copyright (c) TokenVector Project. All rights reserved.
+# Licensed under the MIT License.
+#
+# TV-1001: TokenVector (`.tkv`) translation of the **Neural** module.
+# Source of truth (C# reference implementations, 1:1 sections):
+#   Neural/Activations.cs                -> relu/leaky_relu/sigmoid/tanh/gelu/softmax (+backward VJPs)
+#   Neural/Losses.cs                     -> mse_loss, cross_entropy_loss (+backward)
+#   Neural/Normalization.cs              -> layer_norm, rms_norm
+#   Neural/AttentionEngine.cs            -> scaled_dot_product_attention (+backward), causal mask, RoPE
+#   Neural/ConvEngine.cs                 -> im2col, conv2d, max_pool_2d
+#   Neural/OptimalTransportAndDiffusion.cs -> sinkhorn (Wasserstein), ddim_step
+#
+# Fidelity notes:
+#   - Numerically stable sigmoid (two-branch) and softmax (max-shift) preserved.
+#   - Attention keeps 3D/4D batched matmul semantics; backward VJP formulas
+#     mirror the C# exactly (dV = W^T g, dW = g V^T, dQ = dS K, dK = dS^T Q).
+#   - RoPE keeps thetaBase = 10000 frequency schedule and in-place pair rotation.
+#   - Sinkhorn: Gibbs kernel exp(-M/reg), alternating u/v scaling, 1e-15 guards.
+
+import tv
+from tv.core import NDArray, broadcast_shapes
+from tv.linalg import matmul
+import tv.ops as ops
+
+def _zeros(shape, dtype="f64"):
+    return NDArray(shape, dtype=dtype)
+
+def _ones(n):
+    result = NDArray([n])
+    for i in range(n):
+        result.buffer.data[result.offset + i] = 1.0
+    return result
+
+def _flat_get(arr, i):
+    return arr.get_flat(i)
+
+def _flat_set(arr, i, v):
+    arr.set_flat(i, v)
+
+def _scale(arr, s):
+    result = _zeros(arr.shape)
+    for i in range(arr.total_length):
+        result.buffer.data[result.offset + i] = arr.buffer.data[arr.offset + i] * s
+    return result
+
+def _matmul(a, b):
+    return matmul(a, b)
+
+def _softmax_scores(scores, axis=-1):
+    # Numerically stable softmax along the last axis.
+    norm_axis = axis
+    if norm_axis < 0:
+        norm_axis = scores.rank() + norm_axis
+    max_val = ops.max_axis(scores, norm_axis, keepdims=True)
+    shifted = ops.sub(scores, max_val)
+    exp_result = _zeros(shifted.shape)
+    for i in range(shifted.total_length):
+        exp_result.buffer.data[exp_result.offset + i] = tv.exp(shifted.buffer.data[shifted.offset + i])
+    sum_exp = ops.sum_axis(exp_result, norm_axis, keepdims=True)
+    return ops.div(exp_result, sum_exp)
+
+# ---------------------------------------------------------------------------
+# Activations  (Neural/Activations.cs)
+# ---------------------------------------------------------------------------
+
+def relu(x):
+    # Rectified Linear Unit: max(0, x).
+    result = _zeros(x.shape)
+    src = x if x.is_contiguous else x.contiguous()
+    for i in range(src.total_length):
+        v = src.buffer.data[src.offset + i]
+        if v > 0.0:
+            result.buffer.data[result.offset + i] = v
+    return result
+
+def relu_backward(grad_output, x):
+    # VJP of ReLU: gradient passes where x > 0.
+    grad_input = _zeros(x.shape)
+    g_out = grad_output if grad_output.is_contiguous else grad_output.contiguous()
+    src = x if x.is_contiguous else x.contiguous()
+    for i in range(src.total_length):
+        if src.buffer.data[src.offset + i] > 0.0:
+            grad_input.buffer.data[grad_input.offset + i] = g_out.buffer.data[g_out.offset + i]
+    return grad_input
+
+def leaky_relu(x, negative_slope):
+    # LeakyReLU: x if x > 0 else negative_slope * x.
+    result = _zeros(x.shape)
+    src = x if x.is_contiguous else x.contiguous()
+    for i in range(src.total_length):
+        v = src.buffer.data[src.offset + i]
+        if v > 0.0:
+            result.buffer.data[result.offset + i] = v
+        else:
+            result.buffer.data[result.offset + i] = negative_slope * v
+    return result
+
+def leaky_relu_backward(grad_output, x, negative_slope):
+    grad_input = _zeros(x.shape)
+    g_out = grad_output if grad_output.is_contiguous else grad_output.contiguous()
+    src = x if x.is_contiguous else x.contiguous()
+    for i in range(src.total_length):
+        if src.buffer.data[src.offset + i] > 0.0:
+            grad_input.buffer.data[grad_input.offset + i] = g_out.buffer.data[g_out.offset + i]
+        else:
+            grad_input.buffer.data[grad_input.offset + i] = negative_slope * g_out.buffer.data[g_out.offset + i]
+    return grad_input
+
+def sigmoid(x):
+    # Numerically stable two-branch sigmoid.
+    result = _zeros(x.shape)
+    src = x if x.is_contiguous else x.contiguous()
+    for i in range(src.total_length):
+        v = src.buffer.data[src.offset + i]
+        if v >= 0.0:
+            z = tv.exp(-v)
+            result.buffer.data[result.offset + i] = 1.0 / (1.0 + z)
+        else:
+            z = tv.exp(v)
+            result.buffer.data[result.offset + i] = z / (1.0 + z)
+    return result
+
+def sigmoid_backward(grad_output, output_sigmoid):
+    # d/dx sigmoid = sig * (1 - sig).
+    grad_input = _zeros(output_sigmoid.shape)
+    g_out = grad_output if grad_output.is_contiguous else grad_output.contiguous()
+    sig = output_sigmoid if output_sigmoid.is_contiguous else output_sigmoid.contiguous()
+    for i in range(sig.total_length):
+        s = sig.buffer.data[sig.offset + i]
+        g = g_out.buffer.data[g_out.offset + i]
+        grad_input.buffer.data[grad_input.offset + i] = g * s * (1.0 - s)
+    return grad_input
+
+def tanh(x):
+    result = _zeros(x.shape)
+    src = x if x.is_contiguous else x.contiguous()
+    for i in range(src.total_length):
+        result.buffer.data[result.offset + i] = tv.tanh(src.buffer.data[src.offset + i])
+    return result
+
+def tanh_backward(grad_output, output_tanh):
+    # d/dx tanh = 1 - tanh^2.
+    grad_input = _zeros(output_tanh.shape)
+    g_out = grad_output if grad_output.is_contiguous else grad_output.contiguous()
+    th = output_tanh if output_tanh.is_contiguous else output_tanh.contiguous()
+    for i in range(th.total_length):
+        t = th.buffer.data[th.offset + i]
+        g = g_out.buffer.data[g_out.offset + i]
+        grad_input.buffer.data[grad_input.offset + i] = g * (1.0 - t * t)
+    return grad_input
+
+def gelu(x):
+    # GELU tanh approximation: 0.5*x*(1 + tanh(sqrt(2/pi)*(x + 0.044715*x^3))).
+    result = _zeros(x.shape)
+    src = x if x.is_contiguous else x.contiguous()
+    sqrt2_over_pi = tv.sqrt(2.0 / 3.14159265358979323846)
+    c = 0.044715
+    half = 0.5
+    for i in range(src.total_length):
+        val = src.buffer.data[src.offset + i]
+        cube = val * val * val
+        inner = sqrt2_over_pi * (val + c * cube)
+        result.buffer.data[result.offset + i] = half * val * (1.0 + tv.tanh(inner))
+    return result
+
+def softmax(x, axis=-1):
+    # Softmax with Log-Sum-Exp max-shift trick along the axis.
+    return _softmax_scores(x, axis)
+
+def softmax_backward(grad_output, output_softmax, axis=-1):
+    # VJP: gradInput = S * (g - sum(g * S, axis, keepdims)).
+    norm_axis = axis
+    if norm_axis < 0:
+        norm_axis = output_softmax.rank() + norm_axis
+    dot = ops.sum_axis(ops.mul(grad_output, output_softmax), norm_axis, keepdims=True)
+    return ops.mul(output_softmax, ops.sub(grad_output, dot))
+
+# ---------------------------------------------------------------------------
+# Losses  (Neural/Losses.cs)
+# ---------------------------------------------------------------------------
+
+def mse_loss(predictions, targets):
+    # (1/N) * sum((predictions - targets)^2).
+    diff = ops.sub(predictions, targets)
+    sq_diff = ops.mul(diff, diff)
+    return ops.mean(sq_diff)
+
+def mse_loss_backward(predictions, targets):
+    # (2/N) * (predictions - targets).
+    diff = ops.sub(predictions, targets)
+    scale = 2.0 / predictions.total_length
+    return _scale(diff, scale)
+
+def cross_entropy_loss(logits, target_classes):
+    # Fused-softmax cross entropy. logits [B, C], targetClasses [B].
+    if logits.rank() != 2 or target_classes.rank() != 1:
+        raise ValueError("CrossEntropyLoss requires 2D logits and 1D targetClasses")
+    batch_size = logits.shape[0]
+    num_classes = logits.shape[1]
+    if target_classes.shape[0] != batch_size:
+        raise ValueError("Batch size mismatch between logits and targetClasses")
+    probs = softmax(logits, -1)
+    total_loss = 0.0
+    eps = 1e-12
+    for b in range(batch_size):
+        target_idx = target_classes.get([b])
+        if target_idx < 0 or target_idx >= num_classes:
+            raise IndexError("Target class out of range")
+        p = probs.get([b, target_idx])
+        if p < eps:
+            p = eps
+        total_loss = total_loss - tv.log(p)
+    return total_loss / batch_size
+
+def cross_entropy_loss_backward(logits, target_classes):
+    # (1/B) * (softmax(logits) - one_hot(targets)).
+    batch_size = logits.shape[0]
+    num_classes = logits.shape[1]
+    grad = softmax(logits, -1)
+    scale = 1.0 / batch_size
+    for b in range(batch_size):
+        target_idx = target_classes.get([b])
+        cur = grad.get([b, target_idx])
+        grad.set([b, target_idx], cur - 1.0)
+    return _scale(grad, scale)
+
+# ---------------------------------------------------------------------------
+# Normalization  (Neural/Normalization.cs)
+# ---------------------------------------------------------------------------
+
+def layer_norm(x, gamma=None, beta=None, eps=1e-5):
+    # y = gamma * ((x - mean) / sqrt(var + eps)) + beta -> [output, mean, inv_std].
+    last_axis = x.rank() - 1
+    mean = ops.mean_axis(x, last_axis, keepdims=True)
+    diff = ops.sub(x, mean)
+    sq_diff = ops.mul(diff, diff)
+    variance = ops.mean_axis(sq_diff, last_axis, keepdims=True)
+    inv_std = _zeros(variance.shape)
+    for i in range(variance.total_length):
+        v = variance.buffer.data[variance.offset + i]
+        inv_std.buffer.data[inv_std.offset + i] = 1.0 / tv.sqrt(v + eps)
+    x_hat = ops.mul(diff, inv_std)
+    output = x_hat
+    if gamma is not None:
+        output = ops.mul(output, gamma)
+    if beta is not None:
+        output = ops.add(output, beta)
+    return [output, mean, inv_std]
+
+def rms_norm(x, gamma=None, eps=1e-5):
+    # y = (x / sqrt(mean(x^2) + eps)) * gamma (LLaMA-style).
+    last_axis = x.rank() - 1
+    x_sq = ops.mul(x, x)
+    mean_sq = ops.mean_axis(x_sq, last_axis, keepdims=True)
+    inv_rms = _zeros(mean_sq.shape)
+    for i in range(mean_sq.total_length):
+        v = mean_sq.buffer.data[mean_sq.offset + i]
+        inv_rms.buffer.data[inv_rms.offset + i] = 1.0 / tv.sqrt(v + eps)
+    normalized = ops.mul(x, inv_rms)
+    if gamma is not None:
+        normalized = ops.mul(normalized, gamma)
+    return normalized
+
+# ---------------------------------------------------------------------------
+# AttentionEngine  (Neural/AttentionEngine.cs)
+# ---------------------------------------------------------------------------
+
+def scaled_dot_product_attention(query, key, value, mask=None):
+    # Softmax((Q K^T)/sqrt(d_k) + Mask) V -> [output, attention_weights].
+    if query.rank() < 2 or key.rank() < 2 or value.rank() < 2:
+        raise ValueError("Attention inputs must have rank >= 2")
+    d_k = query.shape[query.rank() - 1]
+    if key.shape[key.rank() - 1] != d_k:
+        raise ValueError("Query and Key feature dimension must match")
+    scale = 1.0 / tv.sqrt(d_k)
+    k_transpose = key.transpose(key.rank() - 2, key.rank() - 1)
+    scores = _matmul(query, k_transpose)
+    scores = _scale(scores, scale)
+    if mask is not None:
+        scores = ops.add(scores, mask)
+    attn_weights = _softmax_scores(scores, -1)
+    output = _matmul(attn_weights, value)
+    return [output, attn_weights]
+
+def scaled_dot_product_attention_backward(grad_output, query, key, value, attn_weights):
+    # Backward VJP of scaled dot-product attention -> [grad_q, grad_k, grad_v].
+    d_k = query.shape[query.rank() - 1]
+    scale = 1.0 / tv.sqrt(d_k)
+    attn_weights_t = attn_weights.transpose(attn_weights.rank() - 2, attn_weights.rank() - 1)
+    grad_value = _matmul(attn_weights_t, grad_output)
+    v_t = value.transpose(value.rank() - 2, value.rank() - 1)
+    grad_weights = _matmul(grad_output, v_t)
+    grad_scores = softmax_backward(grad_weights, attn_weights, -1)
+    scaled_grad_scores = _scale(grad_scores, scale)
+    grad_query = _matmul(scaled_grad_scores, key)
+    grad_scores_t = scaled_grad_scores.transpose(scaled_grad_scores.rank() - 2, scaled_grad_scores.rank() - 1)
+    grad_key = _matmul(grad_scores_t, query)
+    return [grad_query, grad_key, grad_value]
+
+def create_causal_mask(seq_len, mask_value):
+    # Upper-triangular mask with maskValue above the diagonal (future tokens).
+    mask = _zeros([seq_len, seq_len])
+    for i in range(seq_len):
+        for j in range(seq_len):
+            if j > i:
+                mask.set([i, j], mask_value)
+    return mask
+
+def apply_rope(x, start_pos=0, theta_base=10000.0):
+    # Rotary Positional Embedding on [..., SeqLen, HeadDim].
+    seq_len = x.shape[x.rank() - 2]
+    head_dim = x.shape[x.rank() - 1]
+    half_dim = head_dim // 2
+    res = x.clone()
+    batch_and_heads = x.total_length // (seq_len * head_dim)
+    for bh in range(batch_and_heads):
+        base_offset = bh * seq_len * head_dim
+        for m in range(seq_len):
+            pos = start_pos + m
+            pos_offset = base_offset + m * head_dim
+            for i in range(half_dim):
+                freq = 1.0 / _pow_f(theta_base, (2.0 * i) / head_dim)
+                theta = pos * freq
+                cos_v = tv.cos(theta)
+                sin_v = tv.sin(theta)
+                x0 = x.buffer.data[x.offset + pos_offset + i]
+                x1 = x.buffer.data[x.offset + pos_offset + i + half_dim]
+                res.buffer.data[res.offset + pos_offset + i] = x0 * cos_v - x1 * sin_v
+                res.buffer.data[res.offset + pos_offset + i + half_dim] = x0 * sin_v + x1 * cos_v
+    return res
+
+def _pow_f(base, exponent):
+    return tv.exp(exponent * tv.log(base))
+
+# ---------------------------------------------------------------------------
+# ConvEngine  (Neural/ConvEngine.cs)
+# ---------------------------------------------------------------------------
+
+def im2col(input_t, kernel_h, kernel_w, stride_h=1, stride_w=1, pad_h=0, pad_w=0):
+    # [N, C, H, W] -> column matrix [C*Kh*Kw, N*OutH*OutW].
+    if input_t.rank() != 4:
+        raise ValueError("Im2Col requires 4D tensor [N, C, H, W]")
+    batch_size = input_t.shape[0]
+    channels = input_t.shape[1]
+    in_h = input_t.shape[2]
+    in_w = input_t.shape[3]
+    out_h = (in_h + 2 * pad_h - kernel_h) // stride_h + 1
+    out_w = (in_w + 2 * pad_w - kernel_w) // stride_w + 1
+    num_cols = batch_size * out_h * out_w
+    col_rows = channels * kernel_h * kernel_w
+    col_matrix = _zeros([col_rows, num_cols])
+    in_c = input_t.contiguous()
+    for c in range(channels):
+        for kh in range(kernel_h):
+            for kw in range(kernel_w):
+                row_idx = c * kernel_h * kernel_w + kh * kernel_w + kw
+                for b in range(batch_size):
+                    for oh in range(out_h):
+                        ih = oh * stride_h - pad_h + kh
+                        for ow in range(out_w):
+                            iw = ow * stride_w - pad_w + kw
+                            col_idx = b * (out_h * out_w) + oh * out_w + ow
+                            if ih >= 0 and ih < in_h and iw >= 0 and iw < in_w:
+                                col_matrix.set([row_idx, col_idx], in_c.get([b, c, ih, iw]))
+                            else:
+                                col_matrix.set([row_idx, col_idx], 0.0)
+    return col_matrix
+
+def conv2d(input_t, weights, bias=None, stride_h=1, stride_w=1, pad_h=0, pad_w=0):
+    # 2D convolution via im2col + matmul: output [N, C_out, OutH, OutW].
+    if input_t.rank() != 4 or weights.rank() != 4:
+        raise ValueError("Conv2D requires 4D input and 4D weights")
+    batch_size = input_t.shape[0]
+    in_c = input_t.shape[1]
+    in_h = input_t.shape[2]
+    in_w = input_t.shape[3]
+    out_c = weights.shape[0]
+    kernel_h = weights.shape[2]
+    kernel_w = weights.shape[3]
+    if weights.shape[1] != in_c:
+        raise ValueError("Channel mismatch between input and weights")
+    out_h = (in_h + 2 * pad_h - kernel_h) // stride_h + 1
+    out_w = (in_w + 2 * pad_w - kernel_w) // stride_w + 1
+    flat_weights = weights.reshape([out_c, in_c * kernel_h * kernel_w])
+    col_matrix = im2col(input_t, kernel_h, kernel_w, stride_h, stride_w, pad_h, pad_w)
+    out_matrix = _matmul(flat_weights, col_matrix)
+    shaped = out_matrix.reshape([out_c, batch_size, out_h, out_w])
+    permuted = shaped.permute([1, 0, 2, 3]).contiguous()
+    if bias is not None:
+        reshaped_bias = bias.reshape([1, out_c, 1, 1])
+        out_shape = broadcast_shapes(permuted.shape, reshaped_bias.shape)
+        result = _zeros(out_shape)
+        b_p = permuted.broadcast_to(out_shape)
+        b_b = reshaped_bias.broadcast_to(out_shape)
+        for i in range(result.total_length):
+            coords = tv.core.get_multi_index(i, out_shape)
+            result.buffer.data[result.offset + i] = b_p.get(coords) + b_b.get(coords)
+        return result
+    return permuted
+
+def max_pool_2d(input_t, pool_h, pool_w, stride_h=2, stride_w=2):
+    # 2D max pooling -> [output, argmax_indices (flat within each image)].
+    if input_t.rank() != 4:
+        raise ValueError("MaxPool2D requires 4D tensor [N, C, H, W]")
+    n = input_t.shape[0]
+    c = input_t.shape[1]
+    h = input_t.shape[2]
+    w = input_t.shape[3]
+    out_h = (h - pool_h) // stride_h + 1
+    out_w = (w - pool_w) // stride_w + 1
+    output = _zeros([n, c, out_h, out_w])
+    indices = _zeros([n, c, out_h, out_w])
+    in_c = input_t.contiguous()
+    for b in range(n):
+        for ch in range(c):
+            for oh in range(out_h):
+                start_h = oh * stride_h
+                for ow in range(out_w):
+                    start_w = ow * stride_w
+                    max_val = in_c.get([b, ch, start_h, start_w])
+                    max_idx = start_h * w + start_w
+                    for kh in range(pool_h):
+                        for kw in range(pool_w):
+                            cur_h = start_h + kh
+                            cur_w = start_w + kw
+                            val = in_c.get([b, ch, cur_h, cur_w])
+                            if val > max_val:
+                                max_val = val
+                                max_idx = cur_h * w + cur_w
+                    output.set([b, ch, oh, ow], max_val)
+                    indices.set([b, ch, oh, ow], max_idx)
+    return [output, indices]
+
+# ---------------------------------------------------------------------------
+# OptimalTransportAndDiffusion  (Neural/OptimalTransportAndDiffusion.cs)
+# ---------------------------------------------------------------------------
+
+def sinkhorn(a, b, cost_matrix, reg=0.1, max_iter=100, tol=1e-6):
+    # Entropic OT (Sinkhorn distance) -> [distance, transport_plan].
+    n = a.total_length
+    m = b.total_length
+    k_mat = _zeros([n, m])
+    for i in range(n):
+        for j in range(m):
+            k_mat.set([i, j], tv.exp(-cost_matrix.get([i, j]) / reg))
+    u = _ones(n)
+    v = _ones(m)
+    for iteration in range(max_iter):
+        # u = a / (K * v)
+        kv = matmul(k_mat, v.reshape([m, 1])).reshape([n])
+        next_u = _zeros([n])
+        for i in range(n):
+            next_u.buffer.data[next_u.offset + i] = a.buffer.data[a.offset + i] / (kv.buffer.data[kv.offset + i] + 1e-15)
+        # v = b / (K^T * u)
+        k_tu = matmul(k_mat.matrix_transpose(), next_u.reshape([n, 1])).reshape([m])
+        next_v = _zeros([m])
+        for j in range(m):
+            next_v.buffer.data[next_v.offset + j] = b.buffer.data[b.offset + j] / (k_tu.buffer.data[k_tu.offset + j] + 1e-15)
+        err = _norm1(ops.sub(next_u, u))
+        u = next_u
+        v = next_v
+        if err < tol:
+            break
+    p_plan = _zeros([n, m])
+    total_cost = 0.0
+    for i in range(n):
+        for j in range(m):
+            p_val = u.buffer.data[u.offset + i] * k_mat.get([i, j]) * v.buffer.data[v.offset + j]
+            p_plan.set([i, j], p_val)
+            total_cost = total_cost + p_val * cost_matrix.get([i, j])
+    return [total_cost, p_plan]
+
+def _norm1(x):
+    # L1 norm helper.
+    total = 0.0
+    for i in range(x.total_length):
+        v = x.buffer.data[x.offset + i]
+        if v < 0.0:
+            v = -v
+        total = total + v
+    return total
+
+def ddim_step(x_t, predicted_noise, alpha_t, alpha_prev, eta=0.0):
+    # One DDIM deterministic sampling step for diffusion models.
+    sqrt_alpha_t = tv.sqrt(alpha_t)
+    sqrt_one_minus_alpha_t = tv.sqrt(1.0 - alpha_t)
+    sqrt_alpha_prev = tv.sqrt(alpha_prev)
+    # 1. Estimate original x_0
+    pred_x0 = _scale(ops.sub(x_t, _scale(predicted_noise, sqrt_one_minus_alpha_t)), 1.0 / sqrt_alpha_t)
+    # 2. Direction pointing to x_t
+    sigma_t = eta * tv.sqrt((1.0 - alpha_prev) / (1.0 - alpha_t) * (1.0 - alpha_t / alpha_prev))
+    inner = 1.0 - alpha_prev - sigma_t * sigma_t
+    if inner < 0.0:
+        inner = 0.0
+    dir_coeff = tv.sqrt(inner)
+    dir_xt = _scale(predicted_noise, dir_coeff)
+    # 3. x_{t-1} = sqrt(alpha_prev) * pred_x0 + dir_xt
+    return ops.add(_scale(pred_x0, sqrt_alpha_prev), dir_xt)

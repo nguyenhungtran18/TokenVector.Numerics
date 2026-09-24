@@ -1,0 +1,291 @@
+# Copyright (c) TokenVector Project. All rights reserved.
+# Licensed under the MIT License.
+#
+# TV-1001: TokenVector (`.tkv`) translation of the **Physics** module.
+# Source of truth (C# reference implementations, 1:1 sections):
+#   Physics/PhysicsODEAndFields.cs  -> solve_rk4, solve_symplectic_verlet,
+#       nbody_verlet_step (softened gravity), gradient_3d, divergence_3d,
+#       curl_3d, laplacian_3d
+#   Physics/LatticeBoltzmann2D.cs   -> D2Q9 LBM: initialize_equilibrium, step
+#       (BGK collision + periodic streaming + bounce-back obstacle boundary)
+#
+# Fidelity notes:
+#   - RK4 keeps the classic (k1 + 2k2 + 2k3 + k4)/6 combination.
+#   - Verlet keeps kick-drift-kick ordering (symplectic, energy-preserving).
+#   - LBM D2Q9 velocity/weight/opposite tables are kept exactly.
+
+import tv
+from tv.core import NDArray, BoolNDArray
+
+def _zeros(shape):
+    return NDArray(shape)
+
+def _abs(v):
+    if v < 0.0:
+        return -v
+    return v
+
+def _max_i(a, b):
+    if a > b:
+        return a
+    return b
+
+def _min_i(a, b):
+    if a < b:
+        return a
+    return b
+
+def _add_flat(a, b):
+    result = _zeros(a.shape)
+    for i in range(a.total_length):
+        result.buffer.data[result.offset + i] = a.buffer.data[a.offset + i] + b.buffer.data[b.offset + i]
+    return result
+
+def _scale_flat(a, s):
+    result = _zeros(a.shape)
+    for i in range(a.total_length):
+        result.buffer.data[result.offset + i] = a.buffer.data[a.offset + i] * s
+    return result
+
+# ---------------------------------------------------------------------------
+# ODE Solvers (Runge-Kutta 4th order + Symplectic Verlet)
+# ---------------------------------------------------------------------------
+
+def solve_rk4(f, t0, t_end, y0, num_steps):
+    # dy/dt = f(t, y) integrated with classical RK4
+    # -> [timestamps, trajectory (list of state NDArrays)].
+    if num_steps <= 0:
+        raise ValueError("numSteps must be positive")
+    dt = (t_end - t0) / num_steps
+    timestamps = []
+    trajectory = []
+    timestamps.append(t0)
+    trajectory.append(y0.clone())
+    t = t0
+    y = y0.clone()
+    for i in range(num_steps):
+        k1 = f(t, y)
+        k2 = f(t + 0.5 * dt, _add_flat(y, _scale_flat(k1, 0.5 * dt)))
+        k3 = f(t + 0.5 * dt, _add_flat(y, _scale_flat(k2, 0.5 * dt)))
+        k4 = f(t + dt, _add_flat(y, _scale_flat(k3, dt)))
+        # y_{n+1} = y_n + (dt/6) * (k1 + 2*k2 + 2*k3 + k4)
+        delta = _scale_flat(_add_flat(_add_flat(k1, _scale_flat(k2, 2.0)), _add_flat(_scale_flat(k3, 2.0), k4)), dt / 6.0)
+        y = _add_flat(y, delta)
+        t = t + dt
+        timestamps.append(t)
+        trajectory.append(y.clone())
+    return [timestamps, trajectory]
+
+def solve_symplectic_verlet(force_func, t0, t_end, q0, p0, mass, num_steps):
+    # Hamiltonian leapfrog/velocity-Verlet -> [timestamps, positions, momenta].
+    if num_steps <= 0:
+        raise ValueError("numSteps must be positive")
+    if mass <= 0.0:
+        raise ValueError("Mass must be positive")
+    same = len(q0.shape) == len(p0.shape)
+    if same:
+        for i in range(len(q0.shape)):
+            if q0.shape[i] != p0.shape[i]:
+                same = False
+                break
+    if not same:
+        raise ValueError("q0 and p0 must have identical shape")
+    dt = (t_end - t0) / num_steps
+    half_dt = 0.5 * dt
+    inv_mass = 1.0 / mass
+    timestamps = [t0]
+    positions = [q0.clone()]
+    momentas = [p0.clone()]
+    t = t0
+    q = q0.clone()
+    p = p0.clone()
+    f = force_func(q)
+    for i in range(num_steps):
+        # 1. Kick: p_{n+1/2} = p_n + (dt/2) F(q_n)
+        p_mid = _add_flat(p, _scale_flat(f, half_dt))
+        # 2. Drift: q_{n+1} = q_n + dt (p_{n+1/2} / mass)
+        q = _add_flat(q, _scale_flat(p_mid, dt * inv_mass))
+        # 3. New force
+        f = force_func(q)
+        # 4. Kick: p_{n+1} = p_{n+1/2} + (dt/2) F(q_{n+1})
+        p = _add_flat(p_mid, _scale_flat(f, half_dt))
+        t = t + dt
+        timestamps.append(t)
+        positions.append(q.clone())
+        momentas.append(p.clone())
+    return [timestamps, positions, momentas]
+
+# ---------------------------------------------------------------------------
+# N-Body Gravitational Dynamics (Symplectic Verlet)
+# ---------------------------------------------------------------------------
+
+def _compute_gravitational_accelerations(pos, masses, g, softening):
+    n = masses.total_length
+    acc = _zeros([n, 3])
+    eps_sq = softening * softening
+    for i in range(n):
+        ax = 0.0
+        ay = 0.0
+        az = 0.0
+        xi = pos.get([i, 0])
+        yi = pos.get([i, 1])
+        zi = pos.get([i, 2])
+        for j in range(n):
+            if i == j:
+                continue
+            dx = pos.get([j, 0]) - xi
+            dy = pos.get([j, 1]) - yi
+            dz = pos.get([j, 2]) - zi
+            r_sq = dx * dx + dy * dy + dz * dz + eps_sq
+            inv_r3 = 1.0 / (r_sq * tv.sqrt(r_sq))
+            force_factor = g * masses.buffer.data[masses.offset + j] * inv_r3
+            ax = ax + force_factor * dx
+            ay = ay + force_factor * dy
+            az = az + force_factor * dz
+        acc.set([i, 0], ax)
+        acc.set([i, 1], ay)
+        acc.set([i, 2], az)
+    return acc
+
+def nbody_verlet_step(positions, velocities, masses, dt, g=1.0, softening=1e-4):
+    # One velocity-Verlet step -> [new_positions, new_velocities].
+    n = masses.total_length
+    new_pos = positions.clone()
+    new_vel = velocities.clone()
+    acc0 = _compute_gravitational_accelerations(new_pos, masses, g, softening)
+    # 1. r_{n+1} = r_n + v_n dt + 0.5 a_n dt^2
+    for i in range(n):
+        for d in range(3):
+            cur = new_pos.get([i, d])
+            new_pos.set([i, d], cur + new_vel.get([i, d]) * dt + 0.5 * acc0.get([i, d]) * dt * dt)
+    # 2. a_{n+1}
+    acc1 = _compute_gravitational_accelerations(new_pos, masses, g, softening)
+    # 3. v_{n+1} = v_n + 0.5 (a_n + a_{n+1}) dt
+    for i in range(n):
+        for d in range(3):
+            cur = new_vel.get([i, d])
+            new_vel.set([i, d], cur + 0.5 * (acc0.get([i, d]) + acc1.get([i, d])) * dt)
+    return [new_pos, new_vel]
+
+# ---------------------------------------------------------------------------
+# Vector Calculus Fields (3D)
+# ---------------------------------------------------------------------------
+
+def gradient_3d(f, dx=1.0, dy=1.0, dz=1.0):
+    # 3D gradient of scalar field [Nx, Ny, Nz] -> [grad_x, grad_y, grad_z].
+    nx = f.shape[0]
+    ny = f.shape[1]
+    nz = f.shape[2]
+    gx = _zeros([nx, ny, nz])
+    gy = _zeros([nx, ny, nz])
+    gz = _zeros([nx, ny, nz])
+    for i in range(nx):
+        i_prev = _max_i(0, i - 1)
+        i_next = _min_i(nx - 1, i + 1)
+        hx = (i_next - i_prev) * dx
+        for j in range(ny):
+            j_prev = _max_i(0, j - 1)
+            j_next = _min_i(ny - 1, j + 1)
+            hy = (j_next - j_prev) * dy
+            for k in range(nz):
+                k_prev = _max_i(0, k - 1)
+                k_next = _min_i(nz - 1, k + 1)
+                hz = (k_next - k_prev) * dz
+                gx.set([i, j, k], (f.get([i_next, j, k]) - f.get([i_prev, j, k])) / hx)
+                gy.set([i, j, k], (f.get([i, j_next, k]) - f.get([i, j_prev, k])) / hy)
+                gz.set([i, j, k], (f.get([i, j, k_next]) - f.get([i, j, k_prev])) / hz)
+    return [gx, gy, gz]
+
+def divergence_3d(fx, fy, fz, dx=1.0, dy=1.0, dz=1.0):
+    # Divergence of vector field F = (fx, fy, fz).
+    dfx_dx, _g1, _g2 = gradient_3d(fx, dx, dy, dz)
+    _g3, dfy_dy, _g4 = gradient_3d(fy, dx, dy, dz)
+    _g5, _g6, dfz_dz = gradient_3d(fz, dx, dy, dz)
+    return _add_flat(_add_flat(dfx_dx, dfy_dy), dfz_dz)
+
+def curl_3d(fx, fy, fz, dx=1.0, dy=1.0, dz=1.0):
+    # Curl of vector field F = (fx, fy, fz) -> [curl_x, curl_y, curl_z].
+    _g1, dfx_dy, dfx_dz = gradient_3d(fx, dx, dy, dz)
+    dfy_dx, _g2, dfy_dz = gradient_3d(fy, dx, dy, dz)
+    dfz_dx, dfz_dy, _g3 = gradient_3d(fz, dx, dy, dz)
+    curl_x = _add_flat(dfz_dy, _scale_flat(dfy_dz, -1.0))
+    curl_y = _add_flat(dfx_dz, _scale_flat(dfz_dx, -1.0))
+    curl_z = _add_flat(dfy_dx, _scale_flat(dfx_dy, -1.0))
+    return [curl_x, curl_y, curl_z]
+
+def laplacian_3d(f, dx=1.0, dy=1.0, dz=1.0):
+    # Laplacian: div(grad f).
+    gx, gy, gz = gradient_3d(f, dx, dy, dz)
+    return divergence_3d(gx, gy, gz, dx, dy, dz)
+
+# ---------------------------------------------------------------------------
+# Lattice Boltzmann 2D (LBM D2Q9)
+# ---------------------------------------------------------------------------
+
+# D2Q9 discrete velocity directions (cx, cy)
+_CX = [0, 1, 0, -1, 0, 1, -1, -1, 1]
+_CY = [0, 0, 1, 0, -1, 1, 1, -1, -1]
+# D2Q9 lattice weights
+_W = [4.0 / 9.0, 1.0 / 9.0, 1.0 / 9.0, 1.0 / 9.0, 1.0 / 9.0,
+      1.0 / 36.0, 1.0 / 36.0, 1.0 / 36.0, 1.0 / 36.0]
+# Opposite directions for bounce-back boundary
+_OPP = [0, 3, 4, 1, 2, 7, 8, 5, 6]
+
+def initialize_equilibrium(ny, nx, rho0=1.0, u0=0.0, v0=0.0):
+    # D2Q9 equilibrium distribution tensor [Ny, Nx, 9].
+    f = _zeros([ny, nx, 9])
+    u_sq = u0 * u0 + v0 * v0
+    for y in range(ny):
+        for x in range(nx):
+            for i in range(9):
+                cu = _CX[i] * u0 + _CY[i] * v0
+                f.set([y, x, i], rho0 * _W[i] * (1.0 + 3.0 * cu + 4.5 * cu * cu - 1.5 * u_sq))
+    return f
+
+def lbm_step(f, tau=0.6, obstacle_mask=None):
+    # One D2Q9 LBM time-step (BGK collision + streaming) ->
+    # [rho, u, v, f_next].
+    ny = f.shape[0]
+    nx = f.shape[1]
+    rho = _zeros([ny, nx])
+    u = _zeros([ny, nx])
+    v = _zeros([ny, nx])
+    f_coll = _zeros([ny, nx, 9])
+    f_next = _zeros([ny, nx, 9])
+    inv_tau = 1.0 / tau
+    # 1. Macroscopic variables & collision
+    for y in range(ny):
+        for x in range(nx):
+            if obstacle_mask is not None and obstacle_mask.get([y, x]):
+                continue
+            density = 0.0
+            ux = 0.0
+            vy = 0.0
+            for i in range(9):
+                fi = f.get([y, x, i])
+                density = density + fi
+                ux = ux + fi * _CX[i]
+                vy = vy + fi * _CY[i]
+            if density > 1e-12:
+                ux = ux / density
+                vy = vy / density
+            rho.set([y, x], density)
+            u.set([y, x], ux)
+            v.set([y, x], vy)
+            u_sq = ux * ux + vy * vy
+            # BGK equilibrium distribution f_eq
+            for i in range(9):
+                cu = _CX[i] * ux + _CY[i] * vy
+                feq = density * _W[i] * (1.0 + 3.0 * cu + 4.5 * cu * cu - 1.5 * u_sq)
+                f_coll.set([y, x, i], f.get([y, x, i]) - inv_tau * (f.get([y, x, i]) - feq))
+    # 2. Streaming & bounce-back boundary
+    for y in range(ny):
+        for x in range(nx):
+            for i in range(9):
+                prev_x = (x - _CX[i] + nx) % nx
+                prev_y = (y - _CY[i] + ny) % ny
+                if obstacle_mask is not None and obstacle_mask.get([y, x]):
+                    f_next.set([y, x, i], f_coll.get([y, x, _OPP[i]]))
+                else:
+                    f_next.set([y, x, i], f_coll.get([prev_y, prev_x, i]))
+    return [rho, u, v, f_next]

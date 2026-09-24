@@ -4,7 +4,7 @@
 [ 🇬🇧 English ](USER_GUIDE.md) | [ 🇻🇳 Tiếng Việt ](USER_GUIDE_VI.md)
 
 **Document Code:** TKV-NUMERICS-GUIDE-2026-V6 (GRAND UNIFIED EDITION)  
-**Target Platform:** C# 12 / .NET 8 LTS / TokenVector Compiler AOT  
+**Target Platform:** .NET 8 LTS / TokenVector Compiler AOT  
 **Copyright:** TokenVector Compiler Team & Antigravity AI Team  
 
 ---
@@ -24,6 +24,7 @@
 12. [Chapter 12: Polynomials, Cumulative Ops, Grids & Sets](#chapter-12-polynomials-cumulative-ops-grids--sets)
 13. [Chapter 13: AI, Deep Learning & Transformer Kernels (Neural)](#chapter-13-ai-deep-learning--transformer-kernels-neural)
 14. [Chapter 14: Automatic Differentiation & Neural Network Training (Autograd Engine)](#chapter-14-automatic-differentiation--neural-network-training-autograd-engine)
+15. [Chapter 15: TokenVector Standard Library (.tkv) — 100% Numeric Surface Parity](#chapter-15-tokenvector-standard-library-tkv--100-numeric-surface-parity)
 
 ---
 
@@ -52,7 +53,7 @@ var permuted = a.Permute(1, 0); // 2D Transpose
 
 ## CHAPTER 2: BROADCASTING ENGINE & HARDWARE SIMD OPTIMIZATION
 
-`TokenVector.Numerics` incorporates standard NumPy right-aligned broadcasting powered by **Stride-0 tricking** and **AVX2/FMA** hardware vectorization.
+`TokenVector.Numerics` incorporates right-aligned broadcasting powered by **Stride-0 tricking** and **AVX2/FMA** hardware vectorization.
 
 ```csharp
 using TokenVector.Numerics.Core;
@@ -350,3 +351,77 @@ for (int epoch = 0; epoch < 200; epoch++)
     optimizer.Step();
 }
 ```
+
+---
+
+## CHAPTER 15: TOKENVECTOR STANDARD LIBRARY (.TKV) — 100% NUMERIC SURFACE PARITY
+
+*New in v1.1.0.* The entire library is now also published as a **TokenVector language** standard library: 27 `.tkv` modules (~12.1k lines) under `src/tokenvector/`, built per the `TKV-SPEC-SYNTAX-2026-V1` grammar (TV-1001). Every module carries a "Source of truth" header mapping each source section to its `.tkv` function.
+
+### 15.1 Module Map
+
+| Group | Modules |
+| :--- | :--- |
+| Core tensor engine | `core` (NDArray, TensorBuffer, BoolNDArray, shape/broadcast helpers), `engine` (Stride-0 broadcast, SIMD kernels), `io` (.npy/.npz/raw/CSV, MemoryMappedNDArray) |
+| Math surface | `ops`, `manipulation`, `grid`, `compare`, `linalg`, `linalg_functions`, `poly`, `special`, `fft`, `signal`, `random`, `statistics`, `optimize`, `interpolation` |
+| AI | `autograd` (Tensor, reverse-mode AD, SGD/AdamW, Module/Linear/Sequential/RMSNorm), `neural` (activations, attention, conv2d, Sinkhorn, DDIM) |
+| Domains | `quantum`, `physics`, `astro`, `finance`, `spatial`, `geometry3d`, `crypto_graph`, `biology_robotics` |
+
+### 15.2 Numeric Surface Coverage — 100%
+
+The audit tool cross-checks the full numeric-library public surface (595 names audited) and matches each library function against the `.tkv` stdlib (module functions + methods verified on the real `NDArray`/`BoolNDArray`/`Tensor` classes):
+
+| Bucket | Count |
+| :--- | ---: |
+| Language-layer N/A (dtype objects, constants, RNG machinery, packaging) | 241 |
+| **Library surface audited** | **354** |
+| **Matched in .tkv stdlib** | **354 (100%)** |
+| Truly missing | **0** |
+
+The 241 language-layer names are handled by the TokenVector language/compiler itself (`tv.f64`, runtime constants, `tkvc`) by design — not by the library.
+
+### 15.3 Verification Toolchain
+
+```powershell
+# 1. Smoke suite: 175 checks across all 27 modules
+python tests/tokenvector/tkv_harness.py
+#    Syntax gate: all .tkv modules parse, TV-1001 constructs only.
+#    TokenVector stdlib smoke tests: passed=175, failed=0
+
+# 2. Coverage audit (reproducible, prints per-bucket detail)
+python tests/tokenvector/numpy_coverage_audit.py
+
+# 3. Numeric parity + performance benchmark
+python tests/tokenvector/benchmark_vs_numpy.py
+#    matmul / broadcast add: max|diff| = 0.0, SVD: 1.1e-14, FFT: ~5e-12
+
+# Or compile natively with tkvc (compiler repo):
+./tkvc.exe tests/tokenvector/smoke_tests.tkv -r src/tokenvector -o smoke.exe
+```
+
+### 15.4 Quick Start in TokenVector
+
+```tokenvector
+import tv
+from tv.core import from_array
+from tv import linalg
+import tv.autograd as ag
+
+# Math with verified parity (see benchmark)
+A = from_array([4.0, 1.0, 1.0, 3.0], [2, 2])
+U, S, Vt = linalg.svd(A)
+
+# Fancy indexing (standard semantics)
+mask = tv.compare.greater_than(A, tv.core.full(2.0, [2, 2]))
+picked = tv.grid.boolean_select(A, mask)      # arr[mask]
+tv.grid.boolean_assign(A, mask, 0.0)          # arr[mask] = 0.0
+
+# Autograd built into the stdlib
+x = ag.Tensor.full(3.0, [1])
+x.requires_grad = True
+y = x * x
+y.backward()                                  # dy/dx = 2x = 6.0
+print(x.grad.get([0]))
+```
+
+**Parity & performance context:** numeric results match the reference implementation on every benchmarked kernel (max|diff| 0.0 → 1.1e-14). Interpreter-level timings run 400–2800× slower; `tkvc -O parallel -O simd` lowers the same loops to native SIMD/parallel code. See `src/tokenvector/README.md` §5–§6 for the full tables.

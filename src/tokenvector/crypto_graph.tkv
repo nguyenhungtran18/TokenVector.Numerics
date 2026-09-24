@@ -1,0 +1,286 @@
+# Copyright (c) TokenVector Project. All rights reserved.
+# Licensed under the MIT License.
+#
+# TV-1001: TokenVector (`.tkv`) translation of Crypto + Graphs modules.
+# Source of truth (C# reference implementations, 1:1 sections):
+#   Crypto/LatticeMath.cs  -> ForwardNTT / InverseNTT (Cooley-Tukey over
+#       Z_q with bit reversal), PolyMulNTT (O(N log N) cyclic convolution),
+#       ModPow / ModInverse (extended Euclid), LLLReduction (Lovasz delta)
+#   Graphs/SpectralGraph.cs -> Laplacian (normalized + unnormalized),
+#       ChebyshevGraphConv (K-order spectral graph convolution)
+#
+# Fidelity notes:
+#   - NTT keeps exact modular arithmetic (long integers in C#; arbitrary
+#     precision integers in TV), including the (u - v + q) % q correction.
+#   - LLL keeps delta=0.75 default and re-orthonormalizes after each operation
+#     exactly as the C# local function UpdateGramSchmidt (hoisted to the
+#     module-level `_gram_schmidt` helper — TV-1001 has no nested defs).
+
+import tv
+from tv.core import NDArray
+from tv.linalg import matmul
+
+def _get(arr, i):
+    return arr.buffer.data[arr.offset + i]
+
+def _set(arr, i, v):
+    arr.buffer.data[arr.offset + i] = v
+
+# ---------------------------------------------------------------------------
+# Number Theoretic Transform (NTT)  (Crypto/LatticeMath.cs)
+# ---------------------------------------------------------------------------
+
+def _bit_reverse(data):
+    n = len(data)
+    j = 0
+    for i in range(n - 1):
+        if i < j:
+            tmp = data[i]
+            data[i] = data[j]
+            data[j] = tmp
+        k = n >> 1
+        while k <= j:
+            j = j - k
+            k = k >> 1
+        j = j + k
+
+def _mod_pow(base_val, exp, mod):
+    res = 1
+    base_val = base_val % mod
+    while exp > 0:
+        if exp % 2 == 1:
+            res = (res * base_val) % mod
+        base_val = (base_val * base_val) % mod
+        exp = exp >> 1
+    return res
+
+def _mod_inverse(a, m):
+    m0 = m
+    y = 0
+    x = 1
+    if m == 1:
+        return 0
+    while a > 1:
+        q_v = a // m
+        t = m
+        m = a % m
+        a = t
+        t = y
+        y = x - q_v * y
+        x = t
+    if x < 0:
+        x = x + m0
+    return x
+
+def _forward_ntt_list(a, q, root_of_unity):
+    # In-place Cooley-Tukey NTT over Z_q on a list of ints.
+    n = len(a)
+    _bit_reverse(a)
+    length = 2
+    while length <= n:
+        wlen = _mod_pow(root_of_unity, n // length, q)
+        half = length >> 1
+        for i in range(0, n, length):
+            w = 1
+            for j in range(half):
+                u = a[i + j]
+                v = (a[i + j + half] * w) % q
+                a[i + j] = (u + v) % q
+                a[i + j + half] = (u - v + q) % q
+                w = (w * wlen) % q
+        length = length << 1
+    return a
+
+def forward_ntt(a, q, root_of_unity):
+    # Forward NTT on NDArray of length N (power of 2) -> new NDArray.
+    res = a.clone()
+    values = []
+    for i in range(res.total_length):
+        values.append(int(_get(res, i)))
+    values = _forward_ntt_list(values, q, root_of_unity)
+    for i in range(res.total_length):
+        _set(res, i, values[i])
+    return res
+
+def inverse_ntt(a, q, root_of_unity):
+    # Inverse NTT via conjugate root + 1/N scaling.
+    res = a.clone()
+    values = []
+    for i in range(res.total_length):
+        values.append(int(_get(res, i)))
+    n = len(values)
+    inv_root = _mod_inverse(root_of_unity, q)
+    values = _forward_ntt_list(values, q, inv_root)
+    inv_n = _mod_inverse(n, q)
+    for i in range(n):
+        values[i] = (values[i] * inv_n) % q
+    for i in range(n):
+        _set(res, i, values[i])
+    return res
+
+def poly_mul_ntt(poly_a, poly_b, q, root_of_unity):
+    # Cyclic polynomial multiplication in Z_q[X]/(X^N - 1) via NTT.
+    n = poly_a.total_length
+    a_vals = []
+    b_vals = []
+    a_c = poly_a.contiguous()
+    b_c = poly_b.contiguous()
+    for i in range(n):
+        a_vals.append(int(_get(a_c, i)))
+        b_vals.append(int(_get(b_c, i)))
+    a_vals = _forward_ntt_list(a_vals, q, root_of_unity)
+    b_vals = _forward_ntt_list(b_vals, q, root_of_unity)
+    for i in range(n):
+        a_vals[i] = (a_vals[i] * b_vals[i]) % q
+    a_vals = _forward_ntt_list(a_vals, q, _mod_inverse(root_of_unity, q))
+    inv_n = _mod_inverse(n, q)
+    for i in range(n):
+        a_vals[i] = (a_vals[i] * inv_n) % q
+    result = NDArray([n])
+    for i in range(n):
+        _set(result, i, a_vals[i])
+    return result
+
+# ---------------------------------------------------------------------------
+# LLL Lattice Reduction  (Crypto/LatticeMath.cs)
+# ---------------------------------------------------------------------------
+
+def _dot_row(mat_a, row_a, mat_b, row_b, cols):
+    sum_v = 0.0
+    for c in range(cols):
+        sum_v = sum_v + mat_a.get([row_a, c]) * mat_b.get([row_b, c])
+    return sum_v
+
+def _gram_schmidt(b, b_star, mu, n, d):
+    # Hoisted C# local function UpdateGramSchmidt.
+    for i in range(n):
+        for j in range(d):
+            b_star.set([i, j], b.get([i, j]))
+        for j in range(i):
+            b_star_j_norm_sq = _dot_row(b_star, j, b_star, j, d)
+            dot_v = _dot_row(b, i, b_star, j, d)
+            if b_star_j_norm_sq > 1e-15:
+                mu.set([i, j], dot_v / b_star_j_norm_sq)
+            else:
+                mu.set([i, j], 0.0)
+            for k in range(d):
+                b_star.set([i, k], b_star.get([i, k]) - mu.get([i, j]) * b_star.get([j, k]))
+
+def lll_reduction(basis, delta=0.75):
+    # LLL lattice basis reduction with Lovasz parameter delta.
+    n = basis.shape[0]
+    d = basis.shape[1]
+    b = basis.clone()
+    b_star = NDArray([n, d])
+    mu = NDArray([n, n])
+
+    _gram_schmidt(b, b_star, mu, n, d)
+    k_idx = 1
+    while k_idx < n:
+        # Size reduction
+        for j in range(k_idx - 1, -1, -1):
+            if abs(mu.get([k_idx, j])) > 0.5:
+                r = round(mu.get([k_idx, j]))
+                for col in range(d):
+                    b.set([k_idx, col], b.get([k_idx, col]) - r * b.get([j, col]))
+                _gram_schmidt(b, b_star, mu, n, d)
+        # Lovasz condition
+        b_star_k_norm_sq = _dot_row(b_star, k_idx, b_star, k_idx, d)
+        b_star_k_minus1_norm_sq = _dot_row(b_star, k_idx - 1, b_star, k_idx - 1, d)
+        mu_val = mu.get([k_idx, k_idx - 1])
+        if b_star_k_norm_sq >= (delta - mu_val * mu_val) * b_star_k_minus1_norm_sq:
+            k_idx = k_idx + 1
+        else:
+            for col in range(d):
+                tmp = b.get([k_idx, col])
+                b.set([k_idx, col], b.get([k_idx - 1, col]))
+                b.set([k_idx - 1, col], tmp)
+            _gram_schmidt(b, b_star, mu, n, d)
+            k_idx = k_idx - 1
+            if k_idx < 1:
+                k_idx = 1
+    return b
+
+# ---------------------------------------------------------------------------
+# Spectral Graph  (Graphs/SpectralGraph.cs)
+# ---------------------------------------------------------------------------
+
+def laplacian(adjacency_matrix, normalized=True):
+    # L = D - A (unnormalized) or L_norm = I - D^{-1/2} A D^{-1/2}.
+    n = adjacency_matrix.shape[0]
+    degrees = []
+    for i in range(n):
+        d_v = 0.0
+        for j in range(n):
+            d_v = d_v + adjacency_matrix.get([i, j])
+        degrees.append(d_v)
+    if not normalized:
+        l = NDArray([n, n])
+        for i in range(n):
+            for j in range(n):
+                if i == j:
+                    l.set([i, j], degrees[i] - adjacency_matrix.get([i, j]))
+                else:
+                    l.set([i, j], -adjacency_matrix.get([i, j]))
+        return l
+    l_norm = NDArray([n, n])
+    for i in range(n):
+        l_norm.set([i, i], 1.0)
+    for i in range(n):
+        if degrees[i] > 1e-15:
+            inv_sqrt_di = 1.0 / tv.sqrt(degrees[i])
+        else:
+            inv_sqrt_di = 0.0
+        for j in range(n):
+            if degrees[j] > 1e-15:
+                inv_sqrt_dj = 1.0 / tv.sqrt(degrees[j])
+            else:
+                inv_sqrt_dj = 0.0
+            if adjacency_matrix.get([i, j]) != 0.0:
+                l_norm.set([i, j], l_norm.get([i, j]) - inv_sqrt_di * adjacency_matrix.get([i, j]) * inv_sqrt_dj)
+    return l_norm
+
+def _mat_scale(a, s):
+    result = NDArray(a.shape)
+    for i in range(a.total_length):
+        result.buffer.data[result.offset + i] = a.buffer.data[a.offset + i] * s
+    return result
+
+def _mat_add(a, b):
+    result = NDArray(a.shape)
+    for i in range(a.total_length):
+        result.buffer.data[result.offset + i] = a.buffer.data[a.offset + i] + b.buffer.data[b.offset + i]
+    return result
+
+def _mat_sub(a, b):
+    result = NDArray(a.shape)
+    for i in range(a.total_length):
+        result.buffer.data[result.offset + i] = a.buffer.data[a.offset + i] - b.buffer.data[b.offset + i]
+    return result
+
+def chebyshev_graph_conv(laplacian_mat, node_features, chebyshev_coeffs, lambda_max=2.0):
+    # Y = sum_k theta_k T_k(L_tilde) X with L_tilde = (2/lambda_max) L - I.
+    n = laplacian_mat.shape[0]
+    k_order = chebyshev_coeffs.total_length
+    l_tilde = _mat_sub(_mat_scale(laplacian_mat, 2.0 / lambda_max), _eye(n))
+    # T_0(L) X = X
+    t0 = node_features.clone()
+    y = _mat_scale(t0, _get(chebyshev_coeffs, 0))
+    if k_order > 1:
+        # T_1(L) X = L_tilde X
+        t1 = matmul(l_tilde, node_features)
+        y = _mat_add(y, _mat_scale(t1, _get(chebyshev_coeffs, 1)))
+        # T_k(L) X = 2 L_tilde T_{k-1} X - T_{k-2} X
+        for k in range(2, k_order):
+            l_t1 = matmul(l_tilde, t1)
+            tk = _mat_sub(_mat_scale(l_t1, 2.0), t0)
+            y = _mat_add(y, _mat_scale(tk, _get(chebyshev_coeffs, k)))
+            t0 = t1
+            t1 = tk
+    return y
+
+def _eye(n):
+    m = NDArray([n, n])
+    for i in range(n):
+        m.set([i, i], 1.0)
+    return m

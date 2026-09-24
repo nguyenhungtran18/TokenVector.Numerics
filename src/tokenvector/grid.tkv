@@ -1,0 +1,762 @@
+# Copyright (c) TokenVector Project. All rights reserved.
+# Licensed under the MIT License.
+#
+# TV-1001: TokenVector (`.tkv`) translation of the Ops grid + cumulative + indexing + logic surface.
+# Source of truth (C# reference implementations, 1:1 sections):
+#   Ops/GridOps.cs           -> meshgrid ('xy' 2D + 'ij' ND), diag, diagonal, triu, tril
+#   Ops/CumulativeOps.cs     -> cumsum, cumprod, diff (n-th order)
+#   Ops/IndexingOps.cs       -> filter, set_where, where, take, put
+#   Ops/LogicToleranceOps.cs -> isclose, allclose, all, any (+axis), isnan, isinf, isfinite
+#
+# Fidelity notes:
+#   - meshgrid keeps the 'xy' default for exactly two vectors and 'ij' otherwise.
+#   - isclose condition |a-b| <= atol + rtol*|b| with NaN/Inf short-circuiting
+#     matches the C# implementation exactly.
+
+import tv
+from tv.core import NDArray, BoolNDArray, get_multi_index, row_major_strides, broadcast_shapes, zeros
+
+def _zeros(shape, dtype="f64"):
+    return NDArray(shape, dtype=dtype)
+
+def _flat_get(arr, i):
+    return arr.get_flat(i)
+
+def _flat_set(arr, i, v):
+    arr.set_flat(i, v)
+
+# ---------------------------------------------------------------------------
+# GridOps  (Ops/GridOps.cs)
+# ---------------------------------------------------------------------------
+
+def meshgrid(vectors):
+    # Coordinate matrices from coordinate vectors.
+    # Two vectors -> 'xy' indexing (ny, nx); otherwise 'ij' ND indexing.
+    if len(vectors) == 0:
+        raise ValueError("At least one vector must be provided")
+    for i in range(len(vectors)):
+        if vectors[i].rank() != 1:
+            raise ValueError("Vector at index must be 1D")
+    n = len(vectors)
+    if n == 2:
+        out_shape = [vectors[1].shape[0], vectors[0].shape[0]]
+        grid_x = _zeros(out_shape)
+        grid_y = _zeros(out_shape)
+        x_c = vectors[0].contiguous()
+        y_c = vectors[1].contiguous()
+        ny = out_shape[0]
+        nx = out_shape[1]
+        for r in range(ny):
+            yr = _flat_get(y_c, r)
+            for c in range(nx):
+                grid_x.set([r, c], _flat_get(x_c, c))
+                grid_y.set([r, c], yr)
+        return [grid_x, grid_y]
+    out_shape = []
+    for i in range(n):
+        out_shape.append(vectors[i].shape[0])
+    grids = []
+    for i in range(n):
+        grids.append(_zeros(out_shape))
+    total_elements = 1
+    for i in range(n):
+        total_elements = total_elements * out_shape[i]
+    strides = row_major_strides(out_shape)
+    for flat_idx in range(total_elements):
+        rem = flat_idx
+        coords = []
+        for d in range(n):
+            coords.append(rem // strides[d])
+            rem = rem % strides[d]
+        for d in range(n):
+            val = vectors[d].get([coords[d]])
+            _flat_set(grids[d], flat_idx, val)
+    return grids
+
+def diag(tensor, k=0):
+    # 1D input -> diagonal matrix; 2D input -> extract k-th diagonal.
+    if tensor.rank() == 1:
+        length = tensor.shape[0]
+        n = length + _abs(k)
+        mat = _zeros([n, n])
+        contig = tensor.contiguous()
+        for i in range(length):
+            if k >= 0:
+                r = i
+                c = i + k
+            else:
+                r = i - k
+                c = i
+            mat.set([r, c], _flat_get(contig, i))
+        return mat
+    if tensor.rank() == 2:
+        return diagonal(tensor, k)
+    raise ValueError("Input tensor must be 1D or 2D for Diag")
+
+def diagonal(mat, offset=0):
+    # Specified diagonals of a 2D matrix: np.diagonal.
+    if mat.rank() != 2:
+        raise ValueError("Matrix must be 2D for Diagonal extraction")
+    rows = mat.shape[0]
+    cols = mat.shape[1]
+    if offset >= 0:
+        start_r = 0
+        start_c = offset
+    else:
+        start_r = -offset
+        start_c = 0
+    diag_len = rows - start_r
+    if cols - start_c < diag_len:
+        diag_len = cols - start_c
+    if diag_len < 0:
+        diag_len = 0
+    diag = _zeros([diag_len])
+    for i in range(diag_len):
+        _flat_set(diag, i, mat.get([start_r + i, start_c + i]))
+    return diag
+
+def triu(mat, k=0):
+    # Upper triangle: np.triu (batched over leading dims).
+    if mat.rank() < 2:
+        raise ValueError("Tensor must be at least 2D for Triu")
+    res = mat.clone()
+    rows = mat.shape[mat.rank() - 2]
+    cols = mat.shape[mat.rank() - 1]
+    batch_size = mat.total_length // (rows * cols)
+    for b in range(batch_size):
+        batch_offset = b * rows * cols
+        for r in range(rows):
+            for c in range(cols):
+                if c < r + k:
+                    res.buffer.data[res.offset + batch_offset + r * cols + c] = 0.0
+    return res
+
+def tril(mat, k=0):
+    # Lower triangle: np.tril (batched over leading dims).
+    if mat.rank() < 2:
+        raise ValueError("Tensor must be at least 2D for Tril")
+    res = mat.clone()
+    rows = mat.shape[mat.rank() - 2]
+    cols = mat.shape[mat.rank() - 1]
+    batch_size = mat.total_length // (rows * cols)
+    for b in range(batch_size):
+        batch_offset = b * rows * cols
+        for r in range(rows):
+            for c in range(cols):
+                if c > r + k:
+                    res.buffer.data[res.offset + batch_offset + r * cols + c] = 0.0
+    return res
+
+def _abs(v):
+    if v < 0:
+        return -v
+    return v
+
+# ---------------------------------------------------------------------------
+# CumulativeOps  (Ops/CumulativeOps.cs)
+# ---------------------------------------------------------------------------
+
+def _normalize_axis(axis, rank):
+    normalized = axis
+    if axis < 0:
+        normalized = axis + rank
+    if normalized < 0 or normalized >= rank:
+        raise ValueError("Axis is out of bounds for rank")
+    return normalized
+
+def cumsum(tensor, axis=None):
+    # Cumulative sum along axis (or flattened): np.cumsum.
+    contig = tensor.contiguous()
+    if axis is None:
+        result = _zeros([contig.total_length])
+        running = 0.0
+        for i in range(contig.total_length):
+            running = running + _flat_get(contig, i)
+            _flat_set(result, i, running)
+        return result
+    norm_axis = _normalize_axis(axis, contig.rank())
+    res = _zeros(contig.shape)
+    axis_dim = contig.shape[norm_axis]
+    outer_size = 1
+    for i in range(norm_axis):
+        outer_size = outer_size * contig.shape[i]
+    inner_size = 1
+    for i in range(norm_axis + 1, contig.rank()):
+        inner_size = inner_size * contig.shape[i]
+    for o in range(outer_size):
+        for inn in range(inner_size):
+            acc = 0.0
+            for a in range(axis_dim):
+                flat_idx = (o * axis_dim + a) * inner_size + inn
+                acc = acc + _flat_get(contig, flat_idx)
+                _flat_set(res, flat_idx, acc)
+    return res
+
+def cumprod(tensor, axis=None):
+    # Cumulative product along axis (or flattened): np.cumprod.
+    contig = tensor.contiguous()
+    if axis is None:
+        result = _zeros([contig.total_length])
+        running = 1.0
+        for i in range(contig.total_length):
+            running = running * _flat_get(contig, i)
+            _flat_set(result, i, running)
+        return result
+    norm_axis = _normalize_axis(axis, contig.rank())
+    res = _zeros(contig.shape)
+    axis_dim = contig.shape[norm_axis]
+    outer_size = 1
+    for i in range(norm_axis):
+        outer_size = outer_size * contig.shape[i]
+    inner_size = 1
+    for i in range(norm_axis + 1, contig.rank()):
+        inner_size = inner_size * contig.shape[i]
+    for o in range(outer_size):
+        for inn in range(inner_size):
+            acc = 1.0
+            for a in range(axis_dim):
+                flat_idx = (o * axis_dim + a) * inner_size + inn
+                acc = acc * _flat_get(contig, flat_idx)
+                _flat_set(res, flat_idx, acc)
+    return res
+
+def diff(tensor, n=1, axis=-1):
+    # N-th discrete difference along axis: np.diff.
+    if n < 1:
+        raise ValueError("Order of difference must be >= 1")
+    current = tensor.contiguous()
+    norm_axis = _normalize_axis(axis, current.rank())
+    for iteration in range(n):
+        axis_dim = current.shape[norm_axis]
+        if axis_dim <= 1:
+            empty_shape = []
+            for d in range(current.rank()):
+                empty_shape.append(current.shape[d])
+            empty_shape[norm_axis] = 0
+            return _zeros(empty_shape)
+        new_shape = []
+        for d in range(current.rank()):
+            new_shape.append(current.shape[d])
+        new_shape[norm_axis] = axis_dim - 1
+        next_t = _zeros(new_shape)
+        outer_size = 1
+        for i in range(norm_axis):
+            outer_size = outer_size * current.shape[i]
+        inner_size = 1
+        for i in range(norm_axis + 1, current.rank()):
+            inner_size = inner_size * current.shape[i]
+        next_axis_dim = axis_dim - 1
+        for o in range(outer_size):
+            for inn in range(inner_size):
+                for a in range(next_axis_dim):
+                    cur_flat_idx1 = (o * axis_dim + a + 1) * inner_size + inn
+                    cur_flat_idx0 = (o * axis_dim + a) * inner_size + inn
+                    next_flat_idx = (o * next_axis_dim + a) * inner_size + inn
+                    val = _flat_get(current, cur_flat_idx1) - _flat_get(current, cur_flat_idx0)
+                    _flat_set(next_t, next_flat_idx, val)
+        current = next_t
+    return current
+
+# ---------------------------------------------------------------------------
+# IndexingOps  (Ops/IndexingOps.cs)
+# ---------------------------------------------------------------------------
+
+def filter(tensor, mask):
+    # Elements where mask is true -> flat 1D tensor: arr[mask].
+    if tensor.total_length != mask.total_length:
+        raise ValueError("Tensor and mask must have identical number of elements")
+    matched = []
+    for i in range(tensor.total_length):
+        if mask.buffer[mask.offset + i]:
+            matched.append(tensor.get_flat(i))
+    result = NDArray([len(matched)])
+    for i in range(len(matched)):
+        result.buffer.data[result.offset + i] = matched[i]
+    return result
+
+def set_where(tensor, mask, value):
+    # In-place assignment where mask is true: tensor[mask] = value.
+    if tensor.total_length != mask.total_length:
+        raise ValueError("Tensor and mask must have identical number of elements")
+    for i in range(tensor.total_length):
+        if mask.buffer[mask.offset + i]:
+            tensor.set_flat(i, value)
+    return tensor
+
+def where(condition, x, y):
+    # Elementwise select: np.where(condition, x, y) with full broadcasting.
+    out_shape = broadcast_shapes(x.shape, y.shape)
+    out_shape = broadcast_shapes(condition.shape, out_shape)
+    result = _zeros(out_shape)
+    b_x = x.broadcast_to(out_shape)
+    b_y = y.broadcast_to(out_shape)
+    for i in range(result.total_length):
+        coords = get_multi_index(i, out_shape)
+        if condition.get(coords):
+            result.buffer.data[result.offset + i] = b_x.get(coords)
+        else:
+            result.buffer.data[result.offset + i] = b_y.get(coords)
+    return result
+
+def take(tensor, indices, axis=0):
+    # Gathers along axis by integer indices: np.take.
+    if axis < 0:
+        axis = axis + tensor.rank()
+    if axis < 0 or axis >= tensor.rank():
+        raise ValueError("Axis out of range for take")
+    out_shape = []
+    for d in range(tensor.rank()):
+        out_shape.append(tensor.shape[d])
+    out_shape[axis] = indices.total_length
+    result = _zeros(out_shape)
+    axis_size = tensor.shape[axis]
+    for i in range(result.total_length):
+        coords = get_multi_index(i, out_shape)
+        src_coords = []
+        for d in range(tensor.rank()):
+            src_coords.append(coords[d])
+        take_idx = int(indices.get([coords[axis]]))
+        if take_idx < 0:
+            take_idx = take_idx + axis_size
+        src_coords[axis] = take_idx
+        result.set(coords, tensor.get(src_coords))
+    return result
+
+def put(tensor, indices, values, axis=0):
+    # Scatters values along axis by integer indices: np.put_along_axis.
+    if axis < 0:
+        axis = axis + tensor.rank()
+    axis_size = tensor.shape[axis]
+    for i in range(values.total_length):
+        coords = get_multi_index(i, values.shape)
+        dst_coords = []
+        for d in range(values.rank()):
+            dst_coords.append(coords[d])
+        target_idx = int(indices.get([coords[axis]]))
+        if target_idx < 0:
+            target_idx = target_idx + axis_size
+        dst_coords[axis] = target_idx
+        tensor.set(dst_coords, values.get(coords))
+    return tensor
+
+# ---------------------------------------------------------------------------
+# Fancy indexing  (NumPy-parity boolean/integer array indexing)
+# ---------------------------------------------------------------------------
+# NumPy semantics: arr[mask] gathers where the (broadcastable) boolean mask is
+# true; arr[mask] = values scatters them back in row-major order. The integer
+# variants index the flattened tensor (np.take / np.put with mode='raise').
+
+def boolean_select(tensor, mask):
+    # arr[mask] with a broadcastable boolean mask -> row-major 1D gather.
+    # BoolNDArray has no broadcast_to; broadcasting is applied at read time by
+    # indexing the trailing coords of each operand (NumPy right-aligned rules).
+    out_shape = broadcast_shapes(mask.shape, tensor.shape)
+    out_rank = len(out_shape)
+    mask_rank = len(mask.shape)
+    tensor_rank = len(tensor.shape)
+    picked = []
+    total = out_shape_total(out_shape)
+    for i in range(total):
+        coords = get_multi_index(i, out_shape)
+        if mask.get(coords[out_rank - mask_rank:]):
+            picked.append(tensor.get(coords[out_rank - tensor_rank:]))
+    result = NDArray([len(picked)])
+    for i in range(len(picked)):
+        result.buffer.data[result.offset + i] = picked[i]
+    return result
+
+def boolean_assign(tensor, mask, values):
+    # arr[mask] = values — in-place scatter in row-major order.
+    # values: scalar, or a 1D tensor of the same picked-length (NumPy parity).
+    out_shape = broadcast_shapes(mask.shape, tensor.shape)
+    out_rank = len(out_shape)
+    mask_rank = len(mask.shape)
+    tensor_rank = len(tensor.shape)
+    coords_list = []
+    total = out_shape_total(out_shape)
+    for i in range(total):
+        coords = get_multi_index(i, out_shape)
+        if mask.get(coords[out_rank - mask_rank:]):
+            coords_list.append(coords[out_rank - tensor_rank:])
+    count = len(coords_list)
+    if _is_scalar(values):
+        for i in range(count):
+            tensor.set(coords_list[i], values)
+        return tensor
+    if values.total_length != count:
+        raise ValueError("Boolean assignment shape mismatch: " + str(count) + " slots vs " + str(values.total_length) + " values")
+    for i in range(count):
+        tensor.set(coords_list[i], values.get_flat(i))
+    return tensor
+
+def flat_index_select(tensor, indices):
+    # np.take(tensor, indices) over the flattened tensor (mode='raise').
+    result = NDArray(indices.shape, dtype=tensor.dtype)
+    for i in range(indices.total_length):
+        idx = int(indices.get_flat(i))
+        if idx < 0:
+            idx = idx + tensor.total_length
+        if idx < 0 or idx >= tensor.total_length:
+            raise ValueError("Index out of bounds: " + str(idx))
+        result.buffer.data[result.offset + i] = tensor.get_flat(idx)
+    return result
+
+def flat_index_assign(tensor, indices, values):
+    # np.put(tensor, indices, values) over the flattened tensor.
+    for i in range(indices.total_length):
+        idx = int(indices.get_flat(i))
+        if idx < 0:
+            idx = idx + tensor.total_length
+        if idx < 0 or idx >= tensor.total_length:
+            raise ValueError("Index out of bounds: " + str(idx))
+        if _is_scalar(values):
+            tensor.set_flat(idx, values)
+        else:
+            tensor.set_flat(idx, values.get_flat(i % values.total_length))
+    return tensor
+
+def _is_scalar(v):
+    # NumPy scalar-assign parity: numbers are not NDArray instances.
+    return getattr(v, "shape", None) is None
+
+def out_shape_total(shape):
+    # Local shape_total_length alias kept for IndexingOps cohesion.
+    total = 1
+    for i in range(len(shape)):
+        total = total * shape[i]
+    return total
+
+# ---------------------------------------------------------------------------
+# LogicToleranceOps  (Ops/LogicToleranceOps.cs)
+# ---------------------------------------------------------------------------
+
+def isclose(a, b, rtol=1e-5, atol=1e-8):
+    # |a - b| <= (atol + rtol * |b|), NaN-safe: np.isclose.
+    out_shape = broadcast_shapes(a.shape, b.shape)
+    res = BoolNDArray(out_shape)
+    a_c = a.broadcast_to(out_shape).contiguous()
+    b_c = b.broadcast_to(out_shape).contiguous()
+    for i in range(res.total_length):
+        va = _flat_get(a_c, i)
+        vb = _flat_get(b_c, i)
+        if _is_nan(va) or _is_nan(vb):
+            res.buffer[i] = False
+        elif _is_inf(va) or _is_inf(vb):
+            res.buffer[i] = va == vb
+        else:
+            diff = _abs_f(va - vb)
+            allowed = atol + rtol * _abs_f(vb)
+            res.buffer[i] = diff <= allowed
+    return res
+
+def allclose(a, b, rtol=1e-5, atol=1e-8):
+    # np.allclose: all elements within tolerance.
+    close_mask = isclose(a, b, rtol, atol)
+    return all(close_mask)
+
+def all(mask):
+    # True when every element of the boolean mask is true.
+    for i in range(mask.total_length):
+        if not mask.buffer[mask.offset + i]:
+            return False
+    return True
+
+def any(mask):
+    # True when at least one element of the boolean mask is true.
+    for i in range(mask.total_length):
+        if mask.buffer[mask.offset + i]:
+            return True
+    return False
+
+def all_axis(mask, axis):
+    # np.all along an axis -> BoolNDArray.
+    return _bool_reduce(mask, axis, True)
+
+def any_axis(mask, axis):
+    # np.any along an axis -> BoolNDArray.
+    return _bool_reduce(mask, axis, False)
+
+def partition(arr, kth, axis=-1):
+    # np.partition: same-shape result where the kth element (along axis) is in
+    # its sorted position, smaller before, larger after.
+    norm_axis = axis
+    if norm_axis < 0:
+        norm_axis = norm_axis + arr.rank()
+    outer = 1
+    for d in range(norm_axis):
+        outer = outer * arr.shape[d]
+    inner = 1
+    for d in range(norm_axis + 1, arr.rank()):
+        inner = inner * arr.shape[d]
+    axis_dim = arr.shape[norm_axis]
+    result = NDArray(arr.shape, dtype=arr.dtype)
+    for o in range(outer):
+        for inn in range(inner):
+            values = []
+            for a in range(axis_dim):
+                values.append(arr.buffer.data[arr.offset + (o * axis_dim + a) * inner + inn])
+            # Full sort of the axis slice preserves NumPy's kth contract
+            # (result[kth] = sorted[kth], smaller before, larger after).
+            for i in range(1, axis_dim):
+                key = values[i]
+                j = i - 1
+                while j >= 0 and values[j] > key:
+                    values[j + 1] = values[j]
+                    j = j - 1
+                values[j + 1] = key
+            for a in range(axis_dim):
+                result.buffer.data[result.offset + (o * axis_dim + a) * inner + inn] = values[a]
+    return result
+
+def searchsorted(a, v):
+    # np.searchsorted (side='left'): insertion points keeping a sorted.
+    result = NDArray(v.shape)
+    for i in range(v.total_length):
+        target = v.get_flat(i)
+        lo = 0
+        hi = a.total_length
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if a.get_flat(mid) < target:
+                lo = mid + 1
+            else:
+                hi = mid
+        result.buffer.data[result.offset + i] = lo
+    return result
+
+def _bool_reduce(mask, axis, want_all):
+    # BoolNDArray has no rank(); len(mask.shape) is the same value.
+    norm_axis = _normalize_axis(axis, len(mask.shape))
+    out_shape = []
+    for i in range(len(mask.shape)):
+        if i != norm_axis:
+            out_shape.append(mask.shape[i])
+    if len(out_shape) == 0:
+        out_shape = [1]
+    result = BoolNDArray(out_shape)
+    axis_dim = mask.shape[norm_axis]
+    outer_size = 1
+    for i in range(norm_axis):
+        outer_size = outer_size * mask.shape[i]
+    inner_size = 1
+    for i in range(norm_axis + 1, len(mask.shape)):
+        inner_size = inner_size * mask.shape[i]
+    for o in range(outer_size):
+        for inn in range(inner_size):
+            if want_all:
+                acc = True
+                for a in range(axis_dim):
+                    flat_idx = (o * axis_dim + a) * inner_size + inn
+                    if not mask.buffer[mask.offset + flat_idx]:
+                        acc = False
+                        break
+            else:
+                acc = False
+                for a in range(axis_dim):
+                    flat_idx = (o * axis_dim + a) * inner_size + inn
+                    if mask.buffer[mask.offset + flat_idx]:
+                        acc = True
+                        break
+            out_flat_idx = o * inner_size + inn
+            result.buffer[result.offset + out_flat_idx] = acc
+    return result
+
+def isnan(tensor):
+    # Boolean mask of NaN elements: np.isnan.
+    res = BoolNDArray(tensor.shape)
+    contig = tensor.contiguous()
+    for i in range(tensor.total_length):
+        res.buffer[i] = _is_nan(_flat_get(contig, i))
+    return res
+
+def isinf(tensor):
+    # Boolean mask of +-Inf elements: np.isinf.
+    res = BoolNDArray(tensor.shape)
+    contig = tensor.contiguous()
+    for i in range(tensor.total_length):
+        res.buffer[i] = _is_inf(_flat_get(contig, i))
+    return res
+
+def isfinite(tensor):
+    # Boolean mask of finite elements: np.isfinite.
+    res = BoolNDArray(tensor.shape)
+    contig = tensor.contiguous()
+    for i in range(tensor.total_length):
+        v = _flat_get(contig, i)
+        res.buffer[i] = not _is_nan(v) and not _is_inf(v)
+    return res
+
+def _abs_f(v):
+    if v < 0.0:
+        return -v
+    return v
+
+def _is_nan(v):
+    # NaN is the only value not equal to itself.
+    return v != v
+
+def _is_inf(v):
+    return v > 1.7976931348623157e308 or v < -1.7976931348623157e308
+
+# ---------------------------------------------------------------------------
+# NumPy-parity gap fill  (indexing/binning helpers, post TV-1001 audit)
+# ---------------------------------------------------------------------------
+
+def digitize(x, bins, right=False):
+    # np.digitize: bin index for each element (monotonic bins).
+    n_bins = bins.total_length
+    result = NDArray(x.shape)
+    for i in range(x.total_length):
+        v = x.get_flat(i)
+        idx = 0
+        if right:
+            # right=True: bins[i-1] < x <= bins[i]
+            for b in range(n_bins):
+                if v <= bins.get_flat(b):
+                    idx = b
+                    break
+                idx = b + 1
+        else:
+            # right=False: bins[i-1] <= x < bins[i]
+            for b in range(n_bins):
+                if v < bins.get_flat(b):
+                    idx = b
+                    break
+                idx = b + 1
+        result.buffer.data[result.offset + i] = idx
+    return result
+
+def bincount(weights_tensor, minlength=0):
+    # np.bincount over non-negative int-valued floats -> counts per value.
+    size = 0
+    for i in range(weights_tensor.total_length):
+        v = int(weights_tensor.get_flat(i))
+        if v + 1 > size:
+            size = v + 1
+    if size < minlength:
+        size = minlength
+    result = NDArray([size])
+    for i in range(weights_tensor.total_length):
+        v = int(weights_tensor.get_flat(i))
+        if v < 0:
+            raise ValueError("bincount requires non-negative integers")
+        result.buffer.data[result.offset + v] = result.buffer.data[result.offset + v] + 1.0
+    return result
+
+def diag_indices(n, k=0):
+    # np.diag_indices -> [2, n] tensor of (row, col) pairs for the k-th diagonal.
+    result = NDArray([2, n])
+    for i in range(n):
+        result.set([0, i], i)
+        result.set([1, i], i - k)
+    return result
+
+def diag_indices_from(arr):
+    # np.diag_indices_from: indices of the main diagonal of a square tensor.
+    if arr.rank() != 2 or arr.shape[0] != arr.shape[1]:
+        raise ValueError("diag_indices_from requires a square 2D tensor")
+    return diag_indices(arr.shape[0], 0)
+
+def diagflat(v, k=0):
+    # np.diagflat: flatten v into a diagonal matrix offset by k.
+    flat_len = v.total_length
+    size = flat_len + _abs_g(k)
+    result = zeros([size, size])
+    for i in range(flat_len):
+        row = i + (k if k > 0 else 0)
+        col = i + (-k if k < 0 else 0)
+        result.set([row, col], v.get_flat(i))
+    return result
+
+def _abs_g(v):
+    if v < 0:
+        return -v
+    return v
+
+def fill_diagonal(matrix, value):
+    # np.fill_diagonal: in-place fill of the main diagonal (k=0).
+    n = matrix.shape[0]
+    for i in range(n):
+        matrix.set([i, i], value)
+    return matrix
+
+def tri(n, m=None, k=0):
+    # np.tri: ones at and below the k-th diagonal ([n, m] float tensor).
+    if m is None:
+        m = n
+    result = zeros([n, m])
+    for i in range(n):
+        for j in range(m):
+            if j - i <= k:
+                result.set([i, j], 1.0)
+    return result
+
+def tril_indices(n, k=0):
+    # np.tril_indices -> [2, K] coordinates of the lower triangle (j - i <= k).
+    coords = []
+    for i in range(n):
+        for j in range(0, _tri_upper(i, k)):
+            coords.append([i, j])
+    return _coords_to_tensor(coords)
+
+def _tri_upper(i, k):
+    # exclusive upper bound for j given row i and offset k.
+    bound = i + k + 1
+    if bound > 0:
+        return bound
+    return 0
+
+def triu_indices(n, k=0):
+    # np.triu_indices -> [2, K] coordinates of the upper triangle (j - i >= k).
+    coords = []
+    for i in range(n):
+        for j in range(_tri_lower(i, k), n):
+            coords.append([i, j])
+    return _coords_to_tensor(coords)
+
+def _tri_lower(i, k):
+    lower = i + k
+    if lower < 0:
+        return 0
+    return lower
+
+def _coords_to_tensor(coords):
+    result = NDArray([2, len(coords)])
+    for i in range(len(coords)):
+        result.set([0, i], coords[i][0])
+        result.set([1, i], coords[i][1])
+    return result
+
+def tril_indices_from(arr, k=0):
+    return tril_indices(arr.shape[0], k)
+
+def triu_indices_from(arr, k=0):
+    return triu_indices(arr.shape[0], k)
+
+def mask_indices(n, mask_kind, k=0):
+    # np.mask_indices: tril/triu coordinates for 'tril' or 'triu' (k offset).
+    if mask_kind == "tril":
+        return tril_indices(n, k)
+    if mask_kind == "triu":
+        return triu_indices(n, k)
+    raise ValueError("mask_indices requires 'tril' or 'triu'")
+
+def vander(x, n=None, increasing=False):
+    # np.vander: Vandermonde matrix (decreasing powers by default).
+    if n is None:
+        n = x.total_length
+    result = zeros([x.total_length, n])
+    for i in range(x.total_length):
+        v = x.get_flat(i)
+        for j in range(n):
+            p = n - 1 - j
+            if increasing:
+                p = j
+            if p == 0:
+                result.set([i, j], 1.0)
+            else:
+                acc = 1.0
+                for t in range(p):
+                    acc = acc * v
+                result.set([i, j], acc)
+    return result

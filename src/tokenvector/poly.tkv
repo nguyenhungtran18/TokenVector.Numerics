@@ -1,0 +1,289 @@
+# Copyright (c) TokenVector Project. All rights reserved.
+# Licensed under the MIT License.
+#
+# TV-1001: TokenVector (`.tkv`) translation of LinAlg/Polynomial.cs + NumericalAnalysis.cs (part 6).
+# Source of truth (C# reference implementations, 1:1 sections):
+#   PolyFit (Vandermonde + least squares) -> poly_fit
+#   PolyVal (Horner)                      -> poly_val
+#   Roots (linear/quadratic/companion QR) -> roots, roots_tensor
+#   TrapezoidalRule / CentralDifference(2nd, 4th) / Lerp /
+#   PolynomialInterpolation (Lagrange)    -> numerical analysis below
+#
+# Fidelity notes:
+#   - Companion-matrix eigenvalue solver keeps the shifted Givens QR iteration,
+#     deflation threshold 1e-12, and maxIter = 100 * n of the C# version.
+#   - Roots are returned as Complex pairs (tv.linalg_functions.Complex) or as an
+#     [N, 2] real tensor, matching both C# overloads.
+
+import tv
+from tv.core import NDArray
+from tv.linalg import matmul
+from tv.linalg_functions import Complex
+from tv.linalg_functions import lstsq as _lstsq
+
+def _zeros(shape):
+    return NDArray(shape)
+
+def _from_list(values):
+    result = NDArray([len(values)])
+    for i in range(len(values)):
+        result.buffer.data[result.offset + i] = values[i]
+    return result
+
+def _flat_get(arr, i):
+    return arr.get_flat(i)
+
+def _flat_set(arr, i, v):
+    arr.set_flat(i, v)
+
+# ---------------------------------------------------------------------------
+# Polynomial  (LinAlg/Polynomial.cs)
+# ---------------------------------------------------------------------------
+
+def poly_fit(x, y, deg):
+    # Fits polynomial degree `deg` to (x, y) via Vandermonde least squares.
+    # Returns coefficients descending: [c_deg, ..., c_0].
+    if x.rank() != 1 or y.rank() != 1:
+        raise ValueError("x and y must be 1D vectors")
+    if x.shape[0] != y.shape[0]:
+        raise ValueError("x and y must have the same length")
+    if deg < 0:
+        raise ValueError("Polynomial degree must be >= 0")
+    n = x.shape[0]
+    num_coeffs = deg + 1
+    if n < num_coeffs:
+        raise ValueError("Number of points must be >= degree + 1")
+    x_c = x.contiguous()
+    v = _zeros([n, num_coeffs])
+    for i in range(n):
+        xi = _flat_get(x_c, i)
+        p = 1.0
+        j = num_coeffs - 1
+        while j >= 0:
+            v.set([i, j], p)
+            p = p * xi
+            j = j - 1
+    return _lstsq(v, y)
+
+def poly_val(coeffs, x):
+    # Evaluates polynomial (descending coefficients) at points x via Horner.
+    if coeffs.rank() != 1:
+        raise ValueError("Polynomial coefficients must be a 1D vector")
+    if coeffs.shape[0] == 0:
+        raise ValueError("Coefficients vector cannot be empty")
+    num_coeffs = coeffs.shape[0]
+    c_c = coeffs.contiguous()
+    x_c = x.contiguous()
+    result = _zeros(x.shape)
+    for i in range(x.total_length):
+        xi = _flat_get(x_c, i)
+        acc = _flat_get(c_c, 0)
+        for c in range(1, num_coeffs):
+            acc = acc * xi + _flat_get(c_c, c)
+        _flat_set(result, i, acc)
+    return result
+
+def roots(coeffs):
+    # Polynomial roots: returns list of Complex.
+    # Degree 1 linear; degree 2 quadratic; general degree companion matrix.
+    if coeffs.rank() != 1:
+        raise ValueError("Coefficients must be a 1D vector")
+    c_c = coeffs.contiguous()
+    start = 0
+    while start < c_c.total_length:
+        v = _flat_get(c_c, start)
+        if v < 0.0:
+            v = -v
+        if v < 1e-15:
+            start = start + 1
+        else:
+            break
+    remaining = c_c.total_length - start
+    if remaining <= 1:
+        return []
+    deg = remaining - 1
+    leading = _flat_get(c_c, start)
+    if deg == 1:
+        r = -_flat_get(c_c, start + 1) / leading
+        return [Complex(r, 0.0)]
+    if deg == 2:
+        a = leading
+        b = _flat_get(c_c, start + 1)
+        c = _flat_get(c_c, start + 2)
+        disc = b * b - 4.0 * a * c
+        if disc >= 0.0:
+            sqrt_d = tv.sqrt(disc)
+            return [Complex((-b + sqrt_d) / (2.0 * a), 0.0),
+                    Complex((-b - sqrt_d) / (2.0 * a), 0.0)]
+        sqrt_d = tv.sqrt(-disc)
+        real_part = -b / (2.0 * a)
+        imag_part = sqrt_d / (2.0 * a)
+        return [Complex(real_part, imag_part), Complex(real_part, -imag_part)]
+    # General degree: companion matrix eigenvalues
+    comp = _zeros([deg, deg])
+    for j in range(deg):
+        comp.set([0, j], -_flat_get(c_c, start + 1 + j) / leading)
+    for i in range(1, deg):
+        comp.set([i, i - 1], 1.0)
+    return _compute_eigenvalues_general(comp)
+
+def roots_tensor(coeffs):
+    # Roots as NDArray [N, 2] (col 0: real, col 1: imaginary).
+    root_list = roots(coeffs)
+    res = _zeros([len(root_list), 2])
+    for i in range(len(root_list)):
+        res.set([i, 0], root_list[i].real)
+        res.set([i, 1], root_list[i].imaginary)
+    return res
+
+def _h_get(h, i, j, width):
+    return h[i * width + j]
+
+def _h_set(h, i, j, width, value):
+    h[i * width + j] = value
+
+def _compute_eigenvalues_general(mat):
+    # Shifted Givens QR iteration on the companion matrix (Complex roots).
+    n = mat.shape[0]
+    width = n
+    h = []
+    for i in range(n * n):
+        h.append(0.0)
+    for i in range(n):
+        for j in range(n):
+            h[i * n + j] = mat.get([i, j])
+    max_iter = 100 * n
+    m = n
+    root_list = []
+    while m > 2 and max_iter > 0:
+        max_iter = max_iter - 1
+        sub = _abs_f(_h_get(h, m - 1, m - 2, width))
+        if sub <= 1e-12 * (_abs_f(_h_get(h, m - 2, m - 2, width)) + _abs_f(_h_get(h, m - 1, m - 1, width))):
+            root_list.append(Complex(_h_get(h, m - 1, m - 1, width), 0.0))
+            m = m - 1
+            continue
+        d = (_h_get(h, m - 2, m - 2, width) - _h_get(h, m - 1, m - 1, width)) / 2.0
+        if d >= 0.0:
+            sign = 1.0
+        else:
+            sign = -1.0
+        hh12 = _h_get(h, m - 1, m - 2, width)
+        hh21 = _h_get(h, m - 2, m - 1, width)
+        mu = _h_get(h, m - 1, m - 1, width) - (hh12 * hh21) / (d + sign * tv.sqrt(d * d + hh12 * hh21))
+        for i in range(m - 1):
+            x = _h_get(h, i, i, width)
+            if i == 0:
+                x = x - mu
+            y = _h_get(h, i + 1, i, width)
+            r = tv.sqrt(x * x + y * y)
+            if r < 1e-15:
+                continue
+            c = x / r
+            s = -y / r
+            for j in range(m):
+                t1 = c * _h_get(h, i, j, width) - s * _h_get(h, i + 1, j, width)
+                t2 = s * _h_get(h, i, j, width) + c * _h_get(h, i + 1, j, width)
+                _h_set(h, i, j, width, t1)
+                _h_set(h, i + 1, j, width, t2)
+            for j in range(m):
+                t1 = c * _h_get(h, j, i, width) - s * _h_get(h, j, i + 1, width)
+                t2 = s * _h_get(h, j, i, width) + c * _h_get(h, j, i + 1, width)
+                _h_set(h, j, i, width, t1)
+                _h_set(h, j, i + 1, width, t2)
+    if m == 2:
+        a = 1.0
+        b = -(_h_get(h, 0, 0, width) + _h_get(h, 1, 1, width))
+        c = _h_get(h, 0, 0, width) * _h_get(h, 1, 1, width) - _h_get(h, 0, 1, width) * _h_get(h, 1, 0, width)
+        disc = b * b - 4.0 * a * c
+        if disc >= 0.0:
+            sqrt_d = tv.sqrt(disc)
+            root_list.append(Complex((-b + sqrt_d) / 2.0, 0.0))
+            root_list.append(Complex((-b - sqrt_d) / 2.0, 0.0))
+        else:
+            sqrt_d = tv.sqrt(-disc)
+            root_list.append(Complex(-b / 2.0, sqrt_d / 2.0))
+            root_list.append(Complex(-b / 2.0, -sqrt_d / 2.0))
+    elif m == 1:
+        root_list.append(Complex(_h_get(h, 0, 0, width), 0.0))
+    return root_list
+
+def _abs_f(v):
+    if v < 0.0:
+        return -v
+    return v
+
+# ---------------------------------------------------------------------------
+# NumericalAnalysis  (LinAlg/NumericalAnalysis.cs)
+# ---------------------------------------------------------------------------
+
+def trapezoidal_rule(y, dx):
+    # Composite trapezoidal definite integral of a 1D tensor.
+    if y.rank() != 1:
+        raise ValueError("TrapezoidalRule requires a 1D tensor")
+    n = y.shape[0]
+    if n < 2:
+        return 0.0
+    sum_v = (_flat_get(y, 0) + _flat_get(y, n - 1)) / 2.0
+    for i in range(1, n - 1):
+        sum_v = sum_v + _flat_get(y, i)
+    return sum_v * dx
+
+def central_difference_2nd_order(y, dx):
+    # (y[i+1] - y[i-1]) / (2*dx) interior; one-sided at boundaries.
+    if y.rank() != 1:
+        raise ValueError("Numerical derivative requires a 1D tensor")
+    n = y.shape[0]
+    if n < 3:
+        raise ValueError("Tensor length must be at least 3 for central difference")
+    dy = _zeros([n])
+    two_dx = 2.0 * dx
+    _flat_set(dy, 0, (_flat_get(y, 1) - _flat_get(y, 0)) / dx)
+    for i in range(1, n - 1):
+        _flat_set(dy, i, (_flat_get(y, i + 1) - _flat_get(y, i - 1)) / two_dx)
+    _flat_set(dy, n - 1, (_flat_get(y, n - 1) - _flat_get(y, n - 2)) / dx)
+    return dy
+
+def central_difference_4th_order(y, dx):
+    # 4th-order central difference (-y[i+2] + 8y[i+1] - 8y[i-1] + y[i-2])/(12dx).
+    if y.rank() != 1:
+        raise ValueError("Numerical derivative requires a 1D tensor")
+    n = y.shape[0]
+    if n < 5:
+        return central_difference_2nd_order(y, dx)
+    dy = _zeros([n])
+    twelve_dx = 12.0 * dx
+    c8 = 8.0
+    _flat_set(dy, 0, (_flat_get(y, 1) - _flat_get(y, 0)) / dx)
+    _flat_set(dy, 1, (_flat_get(y, 2) - _flat_get(y, 0)) / (2.0 * dx))
+    for i in range(2, n - 2):
+        _flat_set(dy, i, (-_flat_get(y, i + 2) + c8 * _flat_get(y, i + 1) - c8 * _flat_get(y, i - 1) + _flat_get(y, i - 2)) / twelve_dx)
+    _flat_set(dy, n - 2, (_flat_get(y, n - 1) - _flat_get(y, n - 3)) / (2.0 * dx))
+    _flat_set(dy, n - 1, (_flat_get(y, n - 1) - _flat_get(y, n - 2)) / dx)
+    return dy
+
+def lerp_value(a, b, t):
+    # Scalar linear interpolation: (1 - t)*a + t*b.
+    return a + t * (b - a)
+
+def lerp(a, b, t):
+    # Elementwise linear interpolation between two tensors.
+    result = _zeros(a.shape)
+    for i in range(a.total_length):
+        va = a.buffer.data[a.offset + i]
+        vb = b.buffer.data[b.offset + i]
+        result.buffer.data[result.offset + i] = va + t * (vb - va)
+    return result
+
+def polynomial_interpolation(x, y, target_x):
+    # Lagrange polynomial interpolation through (x, y) evaluated at target_x.
+    if x.rank() != 1 or y.rank() != 1 or x.shape[0] != y.shape[0]:
+        raise ValueError("x and y must be 1D tensors of identical length")
+    n = x.shape[0]
+    result = 0.0
+    for i in range(n):
+        term = _flat_get(y, i)
+        for j in range(n):
+            if i != j:
+                term = term * (target_x - _flat_get(x, j)) / (_flat_get(x, i) - _flat_get(x, j))
+        result = result + term
+    return result

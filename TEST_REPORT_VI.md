@@ -3,12 +3,12 @@
 
 [ 🇬🇧 English ](TEST_REPORT.md) | [ 🇻🇳 Tiếng Việt ](TEST_REPORT_VI.md)
 
-**Mã báo cáo:** TR-TKV-NUMERICS-2026-V1.0.1-FINAL (MATHEMATICAL EXPANSION & QP EDITION)  
-**Ngày thực hiện:** 13/09/2026  
-**Phiên bản mục tiêu:** `v1.0.1`  
-**Môi trường thử nghiệm:** .NET SDK 8.0 LTS, Release Configuration, x64 Architecture, Windows OS  
-**Khung kiểm thử:** xUnit.net v2.5.3, Microsoft.NET.Test.Sdk v17.8.0  
-**Trạng thái kiểm thử:** **100% PASSED (84/84 Tests in ~143 ms)**  
+**Mã báo cáo:** TR-TKV-NUMERICS-2026-V1.1.0-FINAL (TOKENVECTOR STDLIB & NUMPY-PARITY EDITION)  
+**Ngày thực hiện:** 24/09/2026  
+**Phiên bản mục tiêu:** `v1.1.0`  
+**Môi trường thử nghiệm:** .NET SDK 8.0 LTS, Release Configuration, x64 Architecture, Windows OS + verification harness  
+**Khung kiểm thử:** xUnit.net v2.5.3, Microsoft.NET.Test.Sdk v17.8.0 + `tests/tokenvector/tkv_harness.py`  
+**Trạng thái kiểm thử:** **100% PASSED (84/84 xUnit in ~179 ms · 175/175 .tkv smoke · 354/354 numeric surface)**  
 
 ---
 
@@ -49,7 +49,7 @@
 | **31** | `Ecosystem`| `TestSortingAndSearching` | Sort theo trục, ArgSort, Unique, Clip | **PASS** | 3 ms |
 | **32** | `Ecosystem`| `TestStatistics` | Tính Var, Std (ddof), Median, Covariance, Correlation | **PASS** | 3 ms |
 | **33** | `Ecosystem`| `TestExtendedLinAlg` | PInv (Moore-Penrose), MatrixRank, Least Squares LstSq | **PASS** | 4 ms |
-| **34** | `Ecosystem`| `TestNpyAndBinaryIO` | Ghi/Đọc file nhị phân chuẩn NumPy `.npy` và Raw Binary | **PASS** | 5 ms |
+| **34** | `Ecosystem`| `TestNpyAndBinaryIO` | Ghi/Đọc file nhị phân chuẩn `.npy` và Raw Binary | **PASS** | 5 ms |
 | **35** | `Parity` | `Test_CumulativeOps_CumSum_And_CumProd`| CumSum & CumProd theo trục 0, trục 1 và mảng phẳng | **PASS** | 3 ms |
 | **36** | `Parity` | `Test_CumulativeOps_Diff` | Sai phân rời rạc bậc 1 và bậc 2 dọc theo trục | **PASS** | 2 ms |
 | **37** | `Parity` | `Test_Polynomial_PolyFit_PolyVal_Roots`| Khớp đa thức bậc 2 Vandermonde, Horner PolyVal, Roots | **PASS** | 4 ms |
@@ -111,15 +111,15 @@ Command: dotnet test "TokenVector.Numerics.sln" -c Release
   Determining projects to restore...
   All projects are up-to-date for restore.
   TokenVector.Numerics -> d:\TokenVector Numerics\src\TokenVector.Numerics\bin\Release\net8.0\TokenVector.Numerics.dll
-  Successfully created package 'd:\TokenVector Numerics\src\TokenVector.Numerics\bin\Release\TokenVector.Numerics.1.0.1.nupkg'.
-  Successfully created package 'd:\TokenVector Numerics\src\TokenVector.Numerics\bin\Release\TokenVector.Numerics.1.0.1.snupkg'.
+  Successfully created package 'd:\TokenVector Numerics\src\TokenVector.Numerics\bin\Release\TokenVector.Numerics.1.1.0.nupkg'.
+  Successfully created package 'd:\TokenVector Numerics\src\TokenVector.Numerics\bin\Release\TokenVector.Numerics.1.1.0.snupkg'.
   TokenVector.Numerics.Tests -> d:\TokenVector Numerics\tests\TokenVector.Numerics.Tests\bin\Release\net8.0\TokenVector.Numerics.Tests.dll
 Test run for d:\TokenVector Numerics\tests\TokenVector.Numerics.Tests\bin\Release\net8.0\TokenVector.Numerics.Tests.dll (.NETCoreApp,Version=v8.0)
-VSTest version 17.11.1 (x64)
+VSTest version 17.14.1 (x64)
 
 Starting test execution, please wait...
 A total of 1 test files matched the specified pattern.
 
-Passed!  - Failed:     0, Passed:    84, Skipped:     0, Total:    84, Duration: 143 ms - TokenVector.Numerics.Tests.dll (net8.0)
+Passed!  - Failed:     0, Passed:    84, Skipped:     0, Total:    84, Duration: 179 ms - TokenVector.Numerics.Tests.dll (net8.0)
 ```
 

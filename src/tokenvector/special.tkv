@@ -1,0 +1,393 @@
+# Copyright (c) TokenVector Project. All rights reserved.
+# Licensed under the MIT License.
+#
+# TV-1001: TokenVector (`.tkv`) translation of LinAlg/SpecialFunctions.cs (part 5).
+# Source of truth (C# reference implementations, 1:1 sections):
+#   Erf / Erfc (Abramowitz-Stegun 7.1.26)      -> erf, erfc, erf_scalar
+#   Gamma / LogGamma (Lanczos)                 -> gamma, log_gamma
+#   Bessel I0/J0/Y0/K0                         -> bessel_i0/j0/y0/k0
+#   LambertW (Halley 3rd-order)                -> lambert_w
+#   Airy Ai/Bi                                 -> airy_ai, airy_bi
+#   Beta / LogBeta / Sinc / Logit / Expit /
+#   Digamma / Erfinv                           -> beta, log_beta, sinc, ...
+#
+# Fidelity notes:
+#   - Every polynomial coefficient (Lanczos P, Bessel rational forms, Airy
+#     constants Ai0/Bi0/AiPrime0) is kept bit-for-bit from the C# source.
+#   - Elementwise NDArray wrappers follow the C# shape: compute a scalar
+#     kernel per element over the contiguous layout.
+
+import tv
+from tv.core import NDArray
+
+_PI = 3.14159265358979323846264338327950288
+
+_LANCZOS_P = [
+    676.520368128714,
+    -1259.1392167224028,
+    771.32342877765313,
+    -176.61502916214059,
+    12.507343278686905,
+    -0.138571095856205,
+    9.9843695780195716e-6,
+    1.5056327351493116e-7,
+]
+
+# Airy function constants
+_AI0 = 0.35502805388781724      # 1 / (3^(2/3) * Gamma(2/3))
+_BI0 = 0.61492662744600073      # Ai0 * sqrt(3)
+_AI_PRIME0 = 0.25881940379280680  # 1 / (3^(1/3) * Gamma(1/3))
+
+def _abs(x):
+    if x < 0.0:
+        return -x
+    return x
+
+def _zeros_like(arr):
+    return NDArray(arr.shape)
+
+def _map_scalar(tensor, scalar_fn):
+    # Elementwise NDArray wrapper: result[i] = scalar_fn(contiguous[i]).
+    contig = tensor.contiguous()
+    result = _zeros_like(tensor)
+    for i in range(tensor.total_length):
+        result.buffer.data[result.offset + i] = scalar_fn(contig.buffer.data[contig.offset + i])
+    return result
+
+# ---------------------------------------------------------------------------
+# Error functions (Erf, Erfc)
+# ---------------------------------------------------------------------------
+
+def erf_scalar(x):
+    # Abramowitz and Stegun formula 7.1.26 (max error 1.5e-7).
+    if x < 0.0:
+        sign = -1.0
+    else:
+        sign = 1.0
+    x = _abs(x)
+    p = 0.3275911
+    a1 = 0.254829592
+    a2 = -0.284496736
+    a3 = 1.421413741
+    a4 = -1.453152027
+    a5 = 1.061405429
+    t = 1.0 / (1.0 + p * x)
+    y = 1.0 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * tv.exp(-x * x)
+    return sign * y
+
+def erf(tensor):
+    return _map_scalar(tensor, erf_scalar)
+
+def erfc(tensor):
+    return _map_scalar(tensor, lambda x: 1.0 - erf_scalar(x))
+
+# ---------------------------------------------------------------------------
+# Gamma & log-gamma functions
+# ---------------------------------------------------------------------------
+
+def gamma_scalar(z):
+    # Gamma function via Lanczos approximation.
+    if z < 0.5:
+        # Reflection formula: Gamma(z) * Gamma(1-z) = pi / sin(pi*z)
+        return _PI / (tv.sin(_PI * z) * gamma_scalar(1.0 - z))
+    z = z - 1.0
+    x = 0.99999999999980993
+    for i in range(len(_LANCZOS_P)):
+        x = x + _LANCZOS_P[i] / (z + i + 1)
+    t = z + 7.5
+    return tv.sqrt(2.0 * _PI) * _pow_f(t, z + 0.5) * tv.exp(-t) * x
+
+def log_gamma_scalar(z):
+    if z < 0.5:
+        return tv.log(_PI / _abs(tv.sin(_PI * z))) - log_gamma_scalar(1.0 - z)
+    z = z - 1.0
+    x = 0.99999999999980993
+    for i in range(len(_LANCZOS_P)):
+        x = x + _LANCZOS_P[i] / (z + i + 1)
+    t = z + 7.5
+    return 0.5 * tv.log(2.0 * _PI) + (z + 0.5) * tv.log(t) - t + tv.log(x)
+
+def gamma(tensor):
+    return _map_scalar(tensor, gamma_scalar)
+
+def log_gamma(tensor):
+    return _map_scalar(tensor, log_gamma_scalar)
+
+def euler_gamma(x):
+    # numpy Euler-Mascheroni constant broadcast (np.euler_gamma); as a function
+    # it fills a tensor with the constant 0.5772156649015329.
+    const = 0.5772156649015329
+    result = NDArray(x.shape, dtype=x.dtype)
+    for i in range(x.total_length):
+        result.buffer.data[result.offset + i] = const
+    return result
+
+def _pow_f(base, exponent):
+    # General real power: exp(exponent * ln(base)).
+    return tv.exp(exponent * tv.log(base))
+
+# ---------------------------------------------------------------------------
+# Bessel functions (I0, J0, Y0, K0)
+# ---------------------------------------------------------------------------
+
+def bessel_i0_scalar(x):
+    ax = _abs(x)
+    if ax < 3.75:
+        y = (x / 3.75) * (x / 3.75)
+        return 1.0 + y * (3.5156229 + y * (3.0899424 + y * (1.2067492 + y * (0.2659732 + y * (0.360768e-1 + y * 0.45813e-2)))))
+    y = 3.75 / ax
+    return (tv.exp(ax) / tv.sqrt(ax)) * (0.39894228 + y * (0.1328592e-1 + y * (0.225319e-2 + y * (-0.157565e-2 + y * (0.916281e-2 + y * (-0.2057706e-1 + y * (0.2635537e-1 + y * (-0.1647633e-1 + y * 0.392377e-2))))))))
+
+def bessel_j0_scalar(x):
+    ax = _abs(x)
+    if ax < 8.0:
+        y = x * x
+        ans1 = 57568490574.0 + y * (-13362590354.0 + y * (651619640.7 + y * (-11214424.18 + y * (77392.33017 + y * -184.9052456))))
+        ans2 = 57568490411.0 + y * (1029532985.0 + y * (9494680.718 + y * (59272.64853 + y * (267.8532712 + y * 1.0))))
+        return ans1 / ans2
+    z = 8.0 / ax
+    y = z * z
+    xx = ax - 0.785398164
+    f0 = 1.0 + y * (-0.1098628627e-2 + y * (0.2734510407e-4 + y * (-0.2073370639e-5 + y * 0.2093887211e-6)))
+    theta0 = -0.1562499995e-1 + y * (0.1430488765e-3 + y * (-0.6911147651e-5 + y * (0.7621095161e-6 + y * -0.934945152e-7)))
+    return tv.sqrt(0.636619772 / ax) * (f0 * tv.cos(xx + theta0))
+
+def bessel_y0_scalar(x):
+    if x <= 0.0:
+        return tv.nan()
+    if x < 8.0:
+        y = x * x
+        ans1 = -2957821389.0 + y * (7062834065.0 + y * (-512354625.6 + y * (9872750.342 + y * (-77899.10659 + y * 214.072168))))
+        ans2 = 40076544269.0 + y * (745249964.8 + y * (7189466.438 + y * (47447.26470 + y * (226.1030244 + y * 1.0))))
+        return (ans1 / ans2) + (2.0 / _PI) * tv.log(x) * bessel_j0_scalar(x)
+    z = 8.0 / x
+    y = z * z
+    xx = x - 0.785398164
+    f0 = 1.0 + y * (-0.1098628627e-2 + y * (0.2734510407e-4 + y * (-0.2073370639e-5 + y * 0.2093887211e-6)))
+    theta0 = -0.1562499995e-1 + y * (0.1430488765e-3 + y * (-0.6911147651e-5 + y * (0.7621095161e-6 + y * -0.934945152e-7)))
+    return tv.sqrt(0.636619772 / x) * (f0 * tv.sin(xx + theta0))
+
+def bessel_k0_scalar(x):
+    if x <= 0.0:
+        return tv.nan()
+    if x <= 2.0:
+        y = x * x * 0.25
+        poly = -0.57721566 + y * (0.42278420 + y * (0.23069756 + y * (0.03488590 + y * (0.00262698 + y * (0.00010750 + y * 0.00000740)))))
+        return -tv.log(x * 0.5) * bessel_i0_scalar(x) + poly
+    y = 2.0 / x
+    poly = 1.25331414 + y * (-0.07832358 + y * (0.02189568 + y * (-0.01062446 + y * (0.00587872 + y * (-0.00251540 + y * 0.00053208)))))
+    return (tv.exp(-x) / tv.sqrt(x)) * poly
+
+def bessel_i0(tensor):
+    return _map_scalar(tensor, bessel_i0_scalar)
+
+def bessel_j0(tensor):
+    return _map_scalar(tensor, bessel_j0_scalar)
+
+def bessel_y0(tensor):
+    return _map_scalar(tensor, bessel_y0_scalar)
+
+def bessel_k0(tensor):
+    return _map_scalar(tensor, bessel_k0_scalar)
+
+# ---------------------------------------------------------------------------
+# Lambert W function
+# ---------------------------------------------------------------------------
+
+_INV_E = 0.3678794411714423215955  # 1/e
+
+def lambert_w_scalar(x, branch=0):
+    # W(x) * exp(W(x)) = x via Halley's 3rd order iteration; branches 0 and -1.
+    if x < -_INV_E:
+        return tv.nan()
+    if branch == 0:
+        if x == 0.0:
+            return 0.0
+        if _abs(x + _INV_E) < 1e-14:
+            return -1.0
+        if x < 1.0:
+            if _abs(x) < 0.1:
+                # Series near 0: w ~ x - x^2 + 1.5x^3 - 8/3 x^4
+                w = x * (1.0 + x * (-1.0 + x * (1.5 - (8.0 / 3.0) * x)))
+            else:
+                # Branch point expansion near -1/e
+                p = tv.sqrt(2.0 * (2.71828182845904523536 * x + 1.0))
+                w = -1.0 + p - (1.0 / 3.0) * p * p + (11.0 / 72.0) * p * p * p
+        else:
+            # Asymptotic expansion for large x: w ~ ln(x) - ln(ln(x))
+            l1 = tv.log(x)
+            l2 = tv.log(l1)
+            w = l1 - l2 + l2 / l1
+    elif branch == -1:
+        if x >= 0.0 or x < -_INV_E:
+            return tv.nan()
+        if _abs(x + _INV_E) < 1e-14:
+            return -1.0
+        l1 = tv.log(-x)
+        l2 = tv.log(-l1)
+        w = l1 - l2 + l2 / l1
+    else:
+        raise ValueError("Only branches 0 and -1 are supported")
+
+    # Halley's 3rd order iteration: w -= f / (f' - f*f''/(2*f'))
+    for iteration in range(10):
+        ew = tv.exp(w)
+        wew = w * ew
+        f = wew - x
+        if _abs(f) < 1e-15 * _max_f(1.0, _abs(wew)):
+            break
+        f_prime = ew * (w + 1.0)
+        f_double_prime = ew * (w + 2.0)
+        denom = f_prime - (f * f_double_prime) / (2.0 * f_prime)
+        delta = f / denom
+        w = w - delta
+        if _abs(delta) < 1e-15 * _max_f(1.0, _abs(w)):
+            break
+    return w
+
+def _max_f(a, b):
+    if a > b:
+        return a
+    return b
+
+def lambert_w(tensor, branch=0):
+    return _map_scalar(tensor, lambda x: lambert_w_scalar(x, branch))
+
+def lambert_w_value(x, branch=0):
+    # Scalar entry point (C# double overload LambertW(double, int)).
+    return lambert_w_scalar(x, branch)
+
+# ---------------------------------------------------------------------------
+# Airy functions (Ai, Bi)
+# ---------------------------------------------------------------------------
+
+def _airy_series(x):
+    # ComputeAirySeries: Maclaurin terms f and g around 0.
+    x3 = x * x * x
+    f = 1.0
+    g = x
+    term_f = 1.0
+    term_g = x
+    for k in range(1, 31):
+        term_f = term_f * x3 / ((3.0 * k - 2.0) * (3.0 * k - 1.0) * (3.0 * k))
+        f = f + term_f
+        term_g = term_g * x3 / ((3.0 * k - 1.0) * (3.0 * k) * (3.0 * k + 1.0))
+        g = g + term_g
+        if _abs(term_f) < 1e-16 and _abs(term_g) < 1e-16:
+            break
+    return f, g
+
+def airy_ai_scalar(x):
+    # Airy function of the first kind Ai(x).
+    if x > 25.0:
+        return 0.0
+    if x >= 4.0:
+        # Asymptotic expansion for large positive x
+        z = (2.0 / 3.0) * _pow_f(x, 1.5)
+        pre = tv.exp(-z) / (2.0 * tv.sqrt(_PI) * _pow_f(x, 0.25))
+        sum_v = 1.0 - (5.0 / (72.0 * z)) + (385.0 / (10368.0 * z * z))
+        return pre * sum_v
+    if x <= -4.0:
+        # Asymptotic expansion for large negative x
+        ax = -x
+        z = (2.0 / 3.0) * _pow_f(ax, 1.5)
+        pre = 1.0 / (tv.sqrt(_PI) * _pow_f(ax, 0.25))
+        return pre * tv.sin(z + _PI * 0.25)
+    f, g = _airy_series(x)
+    return _AI0 * f - _AI_PRIME0 * g
+
+def airy_bi_scalar(x):
+    # Airy function of the second kind Bi(x).
+    if x >= 4.0:
+        z = (2.0 / 3.0) * _pow_f(x, 1.5)
+        pre = tv.exp(z) / (tv.sqrt(_PI) * _pow_f(x, 0.25))
+        sum_v = 1.0 + (5.0 / (72.0 * z)) + (385.0 / (10368.0 * z * z))
+        return pre * sum_v
+    if x <= -4.0:
+        ax = -x
+        z = (2.0 / 3.0) * _pow_f(ax, 1.5)
+        pre = 1.0 / (tv.sqrt(_PI) * _pow_f(ax, 0.25))
+        return pre * tv.cos(z + _PI * 0.25)
+    f, g = _airy_series(x)
+    return tv.sqrt(3.0) * (_AI0 * f + _AI_PRIME0 * g)
+
+def airy_ai(tensor):
+    return _map_scalar(tensor, airy_ai_scalar)
+
+def airy_bi(tensor):
+    return _map_scalar(tensor, airy_bi_scalar)
+
+def airy_ai_value(x):
+    return airy_ai_scalar(x)
+
+def airy_bi_value(x):
+    return airy_bi_scalar(x)
+
+# ---------------------------------------------------------------------------
+# Advanced special functions (scalar entry points)
+# ---------------------------------------------------------------------------
+
+def erf_value(x):
+    return erf_scalar(x)
+
+def log_gamma_value(x):
+    return log_gamma_scalar(x)
+
+def bessel_i0_value(x):
+    return bessel_i0_scalar(x)
+
+def bessel_j0_value(x):
+    return bessel_j0_scalar(x)
+
+def bessel_y0_value(x):
+    return bessel_y0_scalar(x)
+
+def bessel_k0_value(x):
+    return bessel_k0_scalar(x)
+
+def beta(a, b):
+    # Beta function: B(a, b) = Gamma(a)*Gamma(b)/Gamma(a+b).
+    return tv.exp(log_gamma_scalar(a) + log_gamma_scalar(b) - log_gamma_scalar(a + b))
+
+def log_beta(a, b):
+    return log_gamma_scalar(a) + log_gamma_scalar(b) - log_gamma_scalar(a + b)
+
+def sinc(x):
+    # Normalized sinc: sin(pi*x)/(pi*x), 1.0 at 0.
+    if _abs(x) < 1e-12:
+        return 1.0
+    return tv.sin(_PI * x) / (_PI * x)
+
+def logit(p):
+    return tv.log(p / (1.0 - p))
+
+def expit(x):
+    # Logistic sigmoid: 1 / (1 + e^-x).
+    return 1.0 / (1.0 + tv.exp(-x))
+
+def digamma(x):
+    # Digamma (Psi) via recurrence + asymptotic series.
+    result = 0.0
+    while x < 6.0:
+        result = result - 1.0 / x
+        x = x + 1.0
+    r = 1.0 / x
+    result = result + tv.log(x) - 0.5 * r
+    r2 = r * r
+    result = result - r2 * (1.0 / 12.0 - r2 * (1.0 / 120.0 - r2 * (1.0 / 252.0)))
+    return result
+
+def erfinv(y):
+    # Winitzki approximation for the inverse error function.
+    a = 0.147
+    log_term = tv.log(1.0 - y * y)
+    term1 = 2.0 / (_PI * a) + log_term / 2.0
+    inner_sqrt = term1 * term1 - log_term / a
+    if y < 0.0:
+        sign = -1.0
+    else:
+        sign = 1.0
+    inner = tv.sqrt(inner_sqrt) - term1
+    if inner < 0.0:
+        inner = 0.0
+    return sign * tv.sqrt(inner)

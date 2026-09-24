@@ -1,0 +1,265 @@
+# Copyright (c) TokenVector Project. All rights reserved.
+# Licensed under the MIT License.
+#
+# TV-1001: TokenVector (`.tkv`) translation of Finance/FinanceMath.cs.
+# Source of truth (C# reference implementation, 1:1 sections):
+#   Black-Scholes-Merton call/put + Greeks (Delta/Gamma/Vega/Theta/Rho)
+#   Markowitz portfolio (return, volatility, Sharpe)
+#   Cashflow discounting (NPV, IRR via Newton-Raphson)
+#   CRR binomial tree American options, VaR/CVaR,
+#   BondPrice, MacaulayDuration, NelsonSiegel yield curve
+
+import tv
+from tv.core import NDArray
+from tv.special import erf_scalar
+
+_PI = 3.14159265358979323846
+
+def _abs(v):
+    if v < 0.0:
+        return -v
+    return v
+
+def _pow_f(base, exponent):
+    return tv.exp(exponent * tv.log(base))
+
+# ---------------------------------------------------------------------------
+# Black-Scholes-Merton & The Greeks
+# ---------------------------------------------------------------------------
+
+def _standard_normal_pdf(x):
+    return tv.exp(-0.5 * x * x) / tv.sqrt(2.0 * _PI)
+
+def _standard_normal_cdf(x):
+    return 0.5 * (1.0 + erf_scalar(x / tv.sqrt(2.0)))
+
+def _compute_d1_d2(s, k, t, r, sigma):
+    d1 = (tv.log(s / k) + (r + 0.5 * sigma * sigma) * t) / (sigma * tv.sqrt(t))
+    d2 = d1 - sigma * tv.sqrt(t)
+    return d1, d2
+
+def black_scholes_call(s, k, t, r, sigma):
+    # European call price via Black-Scholes-Merton.
+    if t <= 0:
+        if s - k > 0.0:
+            return s - k
+        return 0.0
+    d1, d2 = _compute_d1_d2(s, k, t, r, sigma)
+    return s * _standard_normal_cdf(d1) - k * tv.exp(-r * t) * _standard_normal_cdf(d2)
+
+def black_scholes_put(s, k, t, r, sigma):
+    # European put price via Black-Scholes-Merton.
+    if t <= 0:
+        if k - s > 0.0:
+            return k - s
+        return 0.0
+    d1, d2 = _compute_d1_d2(s, k, t, r, sigma)
+    return k * tv.exp(-r * t) * _standard_normal_cdf(-d2) - s * _standard_normal_cdf(-d1)
+
+def option_greeks(s, k, t, r, sigma, is_call=True):
+    # Risk sensitivities -> [delta, gamma, vega, theta, rho].
+    d1, d2 = _compute_d1_d2(s, k, t, r, sigma)
+    nd1 = _standard_normal_pdf(d1)
+    n_cdf_d1 = _standard_normal_cdf(d1)
+    n_cdf_d2 = _standard_normal_cdf(d2)
+    if is_call:
+        delta = n_cdf_d1
+    else:
+        delta = n_cdf_d1 - 1.0
+    gamma = nd1 / (s * sigma * tv.sqrt(t))
+    vega = s * nd1 * tv.sqrt(t)
+    if is_call:
+        theta = -(s * nd1 * sigma) / (2.0 * tv.sqrt(t)) - r * k * tv.exp(-r * t) * n_cdf_d2
+    else:
+        theta = -(s * nd1 * sigma) / (2.0 * tv.sqrt(t)) + r * k * tv.exp(-r * t) * _standard_normal_cdf(-d2)
+    if is_call:
+        rho = k * t * tv.exp(-r * t) * n_cdf_d2
+    else:
+        rho = -k * t * tv.exp(-r * t) * _standard_normal_cdf(-d2)
+    return [delta, gamma, vega, theta, rho]
+
+# ---------------------------------------------------------------------------
+# Markowitz Portfolio Optimization
+# ---------------------------------------------------------------------------
+
+def portfolio_return(weights, expected_returns):
+    # r_p = w^T r.
+    w = weights.contiguous()
+    r = expected_returns.contiguous()
+    ret = 0.0
+    for i in range(w.total_length):
+        ret = ret + w.buffer.data[w.offset + i] * r.buffer.data[r.offset + i]
+    return ret
+
+def portfolio_volatility(weights, cov_matrix):
+    # sigma_p = sqrt(w^T Cov w).
+    n = weights.total_length
+    w = weights.contiguous()
+    cov = cov_matrix.contiguous()
+    variance = 0.0
+    for i in range(n):
+        for j in range(n):
+            variance = variance + w.buffer.data[w.offset + i] * cov.get([i, j]) * w.buffer.data[w.offset + j]
+    if variance < 0.0:
+        variance = 0.0
+    return tv.sqrt(variance)
+
+def sharpe_ratio(weights, expected_returns, cov_matrix, risk_free_rate=0.0):
+    # (r_p - r_f) / sigma_p.
+    r_p = portfolio_return(weights, expected_returns)
+    vol = portfolio_volatility(weights, cov_matrix)
+    if vol < 1e-15:
+        return 0.0
+    return (r_p - risk_free_rate) / vol
+
+# ---------------------------------------------------------------------------
+# Cashflows & Discounting (NPV, IRR)
+# ---------------------------------------------------------------------------
+
+def npv(rate, cash_flows):
+    # NPV = sum_{t=0}^{N} CF_t / (1 + r)^t.
+    cf = cash_flows.contiguous()
+    npv_val = 0.0
+    factor = 1.0
+    one_plus_r = 1.0 + rate
+    for t in range(cf.total_length):
+        npv_val = npv_val + cf.buffer.data[cf.offset + t] / factor
+        factor = factor * one_plus_r
+    return npv_val
+
+def irr(cash_flows, guess=0.1, tol=1e-8, max_iter=100):
+    # Internal rate of return via Newton-Raphson.
+    cf = cash_flows.contiguous()
+    r = guess
+    for iteration in range(max_iter):
+        f = 0.0
+        f_prime = 0.0
+        for t in range(cf.total_length):
+            denom = _pow_f(1.0 + r, t)
+            f = f + cf.buffer.data[cf.offset + t] / denom
+            if t > 0:
+                f_prime = f_prime - t * cf.buffer.data[cf.offset + t] / _pow_f(1.0 + r, t + 1)
+        if _abs(f) < tol:
+            return r
+        if _abs(f_prime) < 1e-15:
+            break
+        delta = f / f_prime
+        r = r - delta
+        if _abs(delta) < tol:
+            return r
+    return r
+
+# ---------------------------------------------------------------------------
+# American Options, Risk Measures & Fixed Income
+# ---------------------------------------------------------------------------
+
+def binomial_tree_american_option(s, k, t, r, sigma, steps=100, is_call=False):
+    # Cox-Ross-Rubinstein binomial tree with early exercise.
+    dt = t / steps
+    u = tv.exp(sigma * tv.sqrt(dt))
+    d = 1.0 / u
+    p = (tv.exp(r * dt) - d) / (u - d)
+    discount = tv.exp(-r * dt)
+    values = []
+    # Terminal payoff
+    for i in range(steps + 1):
+        st = s * _pow_f(u, steps - i) * _pow_f(d, i)
+        if is_call:
+            payoff = st - k
+        else:
+            payoff = k - st
+        if payoff < 0.0:
+            payoff = 0.0
+        values.append(payoff)
+    # Backward induction with early exercise check
+    for step in range(steps - 1, -1, -1):
+        for i in range(step + 1):
+            st = s * _pow_f(u, step - i) * _pow_f(d, i)
+            hold_value = discount * (p * values[i] + (1.0 - p) * values[i + 1])
+            if is_call:
+                exercise_value = st - k
+            else:
+                exercise_value = k - st
+            if exercise_value < 0.0:
+                exercise_value = 0.0
+            if hold_value > exercise_value:
+                values[i] = hold_value
+            else:
+                values[i] = exercise_value
+    return values[0]
+
+def _sort_values(values):
+    arr = []
+    for v in values:
+        arr.append(v)
+    for i in range(1, len(arr)):
+        key = arr[i]
+        j = i - 1
+        while j >= 0 and arr[j] > key:
+            arr[j + 1] = arr[j]
+            j = j - 1
+        arr[j + 1] = key
+    return arr
+
+def value_at_risk(returns, confidence=0.95):
+    # Historical VaR at the given confidence level.
+    n = returns.total_length
+    sorted_v = []
+    for i in range(n):
+        sorted_v.append(returns.buffer.data[returns.offset + i])
+    sorted_v = _sort_values(sorted_v)
+    idx = int(tv.floor((1.0 - confidence) * n))
+    if idx < 0:
+        idx = 0
+    if idx > n - 1:
+        idx = n - 1
+    return -sorted_v[idx]
+
+def conditional_value_at_risk(returns, confidence=0.95):
+    # CVaR / expected shortfall.
+    n = returns.total_length
+    sorted_v = []
+    for i in range(n):
+        sorted_v.append(returns.buffer.data[returns.offset + i])
+    sorted_v = _sort_values(sorted_v)
+    cutoff_idx = int(tv.floor((1.0 - confidence) * n))
+    if cutoff_idx <= 0:
+        return -sorted_v[0]
+    sum_v = 0.0
+    for i in range(cutoff_idx):
+        sum_v = sum_v + sorted_v[i]
+    return -sum_v / cutoff_idx
+
+def bond_price(face_value, coupon_rate, ytm, periods, freq=1):
+    # Fair market price of a fixed-coupon bond.
+    coupon = (face_value * coupon_rate) / freq
+    y = ytm / freq
+    if y > 1e-12:
+        pv_coupons = coupon * (1.0 - _pow_f(1.0 + y, -periods)) / y
+    else:
+        pv_coupons = coupon * periods
+    pv_face = face_value * _pow_f(1.0 + y, -periods)
+    return pv_coupons + pv_face
+
+def macaulay_duration(price, face_value, coupon_rate, ytm, periods, freq=1):
+    # Macaulay duration of a bond.
+    coupon = (face_value * coupon_rate) / freq
+    y = ytm / freq
+    sum_v = 0.0
+    for t in range(1, periods + 1):
+        if t == periods:
+            cf = coupon + face_value
+        else:
+            cf = coupon
+        sum_v = sum_v + (t / freq) * (cf / _pow_f(1.0 + y, t))
+    return sum_v / price
+
+def nelson_siegel(beta0, beta1, beta2, lam, t):
+    # Nelson-Siegel yield curve spot rate at maturity t (years).
+    if t <= 1e-6:
+        return beta0 + beta1
+    m = t / lam
+    exp_m = tv.exp(-m)
+    term1 = (1.0 - exp_m) / m
+    term2 = term1 - exp_m
+    return beta0 + beta1 * term1 + beta2 * term2

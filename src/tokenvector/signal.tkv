@@ -1,0 +1,311 @@
+# Copyright (c) TokenVector Project. All rights reserved.
+# Licensed under the MIT License.
+#
+# TV-1001: TokenVector (`.tkv`) translation of LinAlg/SignalProcessing.cs (part 4).
+# Source of truth (C# reference implementations, 1:1 sections):
+#   Convolve / Correlate / SliceConvMode (ConvMode Full|Same|Valid)
+#   Hanning / Hamming / Blackman / Bartlett DSP windows
+#   DWT / IDWT (haar + Daubechies-4 wavelets)
+#   Hilbert / AnalyticSignal (FFT-based)
+#
+# Fidelity notes:
+#   - Daubechies-4 filter coefficients are kept bit-for-bit.
+#   - Wavelet names are matched case-insensitively as in C# (ToLowerInvariant).
+
+import tv
+from tv.core import NDArray
+from tv.fft import fft1d, ifft1d
+
+CONV_FULL = "full"
+CONV_SAME = "same"
+CONV_VALID = "valid"
+
+_SQRT2 = 1.41421356237309504880168872420969808
+_INV_SQRT2 = 0.707106781186547524400844362104849039
+
+# Daubechies 4 (db4) coefficients
+_DB4_H0 = (1.0 + 1.7320508075688772935) / (4.0 * _SQRT2)
+_DB4_H1 = (3.0 + 1.7320508075688772935) / (4.0 * _SQRT2)
+_DB4_H2 = (3.0 - 1.7320508075688772935) / (4.0 * _SQRT2)
+_DB4_H3 = (1.0 - 1.7320508075688772935) / (4.0 * _SQRT2)
+
+def _zeros1d(n):
+    return NDArray([n])
+
+def _flat_get(arr, i):
+    return arr.get_flat(i)
+
+def _flat_set(arr, i, v):
+    arr.set_flat(i, v)
+
+def convolve(a, v, mode=CONV_FULL):
+    # Discrete 1D linear convolution: np.convolve.
+    if a.rank() != 1 or v.rank() != 1:
+        raise ValueError("Convolve requires 1D input tensors")
+    na = a.shape[0]
+    nv = v.shape[0]
+    if na == 0 or nv == 0:
+        return _zeros1d(0)
+    a_c = a.contiguous()
+    v_c = v.contiguous()
+    n_full = na + nv - 1
+    full = _zeros1d(n_full)
+    for k in range(n_full):
+        sum_v = 0.0
+        min_j = k - nv + 1
+        if min_j < 0:
+            min_j = 0
+        max_j = k
+        if max_j > na - 1:
+            max_j = na - 1
+        for j in range(min_j, max_j + 1):
+            sum_v = sum_v + _flat_get(a_c, j) * _flat_get(v_c, k - j)
+        _flat_set(full, k, sum_v)
+    return _slice_conv_mode(full, na, nv, mode)
+
+def correlate(a, v, mode=CONV_FULL):
+    # Discrete 1D cross-correlation: np.correlate (convolution with reversed v).
+    if a.rank() != 1 or v.rank() != 1:
+        raise ValueError("Correlate requires 1D input tensors")
+    na = a.shape[0]
+    nv = v.shape[0]
+    if na == 0 or nv == 0:
+        return _zeros1d(0)
+    a_c = a.contiguous()
+    v_c = v.contiguous()
+    v_rev = _zeros1d(nv)
+    for i in range(nv):
+        _flat_set(v_rev, i, _flat_get(v_c, nv - 1 - i))
+    return convolve(a_c, v_rev, mode)
+
+def _slice_conv_mode(full, na, nv, mode):
+    if mode == CONV_FULL:
+        return full
+    if mode == CONV_SAME:
+        same_len = na
+        if nv > same_len:
+            same_len = nv
+        start_same = (full.total_length - same_len) // 2
+        same = _zeros1d(same_len)
+        for i in range(same_len):
+            _flat_set(same, i, _flat_get(full, start_same + i))
+        return same
+    if mode == CONV_VALID:
+        hi = na
+        if nv > hi:
+            hi = nv
+        lo = na
+        if nv < lo:
+            lo = nv
+        valid_len = hi - lo + 1
+        if valid_len < 0:
+            valid_len = 0
+        if valid_len == 0:
+            return _zeros1d(0)
+        start_valid = lo - 1
+        valid = _zeros1d(valid_len)
+        for i in range(valid_len):
+            _flat_set(valid, i, _flat_get(full, start_valid + i))
+        return valid
+    raise ValueError("Unknown convolution mode")
+
+def hanning(m):
+    # w(n) = 0.5 - 0.5*cos(2*pi*n/(M-1)).
+    if m <= 0:
+        return _zeros1d(0)
+    if m == 1:
+        return _from_list([1.0])
+    w = _zeros1d(m)
+    factor = 2.0 * 3.14159265358979323846264338327950288 / (m - 1)
+    for n in range(m):
+        _flat_set(w, n, 0.5 - 0.5 * tv.cos(factor * n))
+    return w
+
+def hamming(m):
+    # w(n) = 0.54 - 0.46*cos(2*pi*n/(M-1)).
+    if m <= 0:
+        return _zeros1d(0)
+    if m == 1:
+        return _from_list([1.0])
+    w = _zeros1d(m)
+    factor = 2.0 * 3.14159265358979323846264338327950288 / (m - 1)
+    for n in range(m):
+        _flat_set(w, n, 0.54 - 0.46 * tv.cos(factor * n))
+    return w
+
+def blackman(m):
+    # w(n) = 0.42 - 0.5*cos(2*pi*n/(M-1)) + 0.08*cos(4*pi*n/(M-1)).
+    if m <= 0:
+        return _zeros1d(0)
+    if m == 1:
+        return _from_list([1.0])
+    w = _zeros1d(m)
+    factor = 2.0 * 3.14159265358979323846264338327950288 / (m - 1)
+    for n in range(m):
+        _flat_set(w, n, 0.42 - 0.5 * tv.cos(factor * n) + 0.08 * tv.cos(2.0 * factor * n))
+    return w
+
+def bartlett(m):
+    # Bartlett (triangular) window.
+    if m <= 0:
+        return _zeros1d(0)
+    if m == 1:
+        return _from_list([1.0])
+    w = _zeros1d(m)
+    half_m = (m - 1) / 2.0
+    for n in range(m):
+        v = (n - half_m) / half_m
+        if v < 0.0:
+            v = -v
+        _flat_set(w, n, 1.0 - v)
+    return w
+
+def kaiser(m, beta):
+    # np.kaiser window: I0(beta*sqrt(1 - ((2n/(M-1) - 1)^2)))/I0(beta).
+    if m <= 0:
+        return _zeros1d(0)
+    if m == 1:
+        return _from_list([1.0])
+    w = _zeros1d(m)
+    denom = _i0(beta)
+    for n in range(m):
+        t = 2.0 * n / (m - 1) - 1.0
+        _flat_set(w, n, _i0(beta * tv.sqrt(1.0 - t * t)) / denom)
+    return w
+
+def _i0(x):
+    # Modified Bessel function of the first kind, order 0 (polynomial series).
+    if x < 0.0:
+        x = -x
+    y = x / 2.0
+    sum_v = 1.0
+    term = 1.0
+    for k in range(1, 30):
+        term = term * (y * y) / (k * k)
+        sum_v = sum_v + term
+        if term < 1e-16 * sum_v:
+            break
+    return sum_v
+
+def _from_list(values):
+    result = NDArray([len(values)])
+    for i in range(len(values)):
+        result.buffer.data[result.offset + i] = values[i]
+    return result
+
+def _lower(s):
+    out = ""
+    for ch in s:
+        if ch >= "A" and ch <= "Z":
+            out = out + chr(ord(ch) + 32)
+        else:
+            out = out + ch
+    return out
+
+# ---------------------------------------------------------------------------
+# Wavelet transforms (DWT, IDWT)
+# ---------------------------------------------------------------------------
+
+def dwt(signal, wavelet="haar"):
+    # Single-level DWT -> [cA (approximation), cD (detail)]; "haar" or "db4".
+    if signal.rank() != 1:
+        raise ValueError("DWT requires a 1D signal")
+    n = signal.total_length
+    if n == 0:
+        return [_zeros1d(0), _zeros1d(0)]
+    pad_n = n
+    if n % 2 != 0:
+        pad_n = n + 1
+    padded = []
+    for i in range(pad_n):
+        padded.append(0.0)
+    for i in range(n):
+        padded[i] = _flat_get(signal, i)
+    if n < pad_n:
+        padded[n] = _flat_get(signal, n - 1)  # periodic / border repeat
+    half = pad_n // 2
+    c_a = _zeros1d(half)
+    c_d = _zeros1d(half)
+    wl = _lower(wavelet)
+    if wl == "haar" or wl == "db1":
+        for i in range(half):
+            _flat_set(c_a, i, (padded[2 * i] + padded[2 * i + 1]) * _INV_SQRT2)
+            _flat_set(c_d, i, (padded[2 * i] - padded[2 * i + 1]) * _INV_SQRT2)
+    elif wl == "db4" or wl == "d4":
+        h = [_DB4_H0, _DB4_H1, _DB4_H2, _DB4_H3]
+        g = [_DB4_H3, -_DB4_H2, _DB4_H1, -_DB4_H0]
+        for i in range(half):
+            a_val = 0.0
+            d_val = 0.0
+            for j in range(4):
+                idx = (2 * i + j) % pad_n
+                a_val = a_val + h[j] * padded[idx]
+                d_val = d_val + g[j] * padded[idx]
+            _flat_set(c_a, i, a_val)
+            _flat_set(c_d, i, d_val)
+    else:
+        raise ValueError("Wavelet not supported. Use 'haar' or 'db4'")
+    return [c_a, c_d]
+
+def idwt(c_a, c_d, wavelet="haar"):
+    # Inverse DWT reconstructing the signal from cA and cD.
+    if c_a.rank() != 1 or c_d.rank() != 1 or c_a.total_length != c_d.total_length:
+        raise ValueError("cA and cD must be 1D tensors of identical length")
+    half = c_a.total_length
+    n = half * 2
+    result = _zeros1d(n)
+    wl = _lower(wavelet)
+    if wl == "haar" or wl == "db1":
+        for i in range(half):
+            _flat_set(result, 2 * i, (_flat_get(c_a, i) + _flat_get(c_d, i)) * _INV_SQRT2)
+            _flat_set(result, 2 * i + 1, (_flat_get(c_a, i) - _flat_get(c_d, i)) * _INV_SQRT2)
+    elif wl == "db4" or wl == "d4":
+        h = [_DB4_H0, _DB4_H1, _DB4_H2, _DB4_H3]
+        g = [_DB4_H3, -_DB4_H2, _DB4_H1, -_DB4_H0]
+        for i in range(half):
+            for j in range(4):
+                target_idx = (2 * i + j) % n
+                cur = _flat_get(result, target_idx)
+                _flat_set(result, target_idx, cur + h[j] * _flat_get(c_a, i) + g[j] * _flat_get(c_d, i))
+    else:
+        raise ValueError("Wavelet not supported. Use 'haar' or 'db4'")
+    return result
+
+# ---------------------------------------------------------------------------
+# Hilbert transform & analytic signal
+# ---------------------------------------------------------------------------
+
+def hilbert(signal):
+    # Hilbert transform H[x] of a 1D real signal (imaginary part).
+    real_part, imag_part = analytic_signal(signal)
+    return imag_part
+
+def analytic_signal(signal):
+    # Analytic signal x_a(t) = x(t) + i*H[x(t)] via FFT -> [real, imag].
+    if signal.rank() != 1:
+        raise ValueError("AnalyticSignal requires a 1D tensor")
+    n = signal.total_length
+    if n == 0:
+        return [_zeros1d(0), _zeros1d(0)]
+    c_input = []
+    for i in range(n):
+        c_input.append(Complex(_flat_get(signal, i), 0.0))
+    f_val = fft1d(c_input)
+    if n % 2 == 0:
+        for i in range(1, n // 2):
+            f_val[i] = f_val[i].mul_scalar(2.0)
+        for i in range(n // 2 + 1, n):
+            f_val[i] = Complex(0.0, 0.0)
+    else:
+        half = (n + 1) // 2
+        for i in range(1, half):
+            f_val[i] = f_val[i].mul_scalar(2.0)
+        for i in range(half, n):
+            f_val[i] = Complex(0.0, 0.0)
+    analytic = ifft1d(f_val)
+    real_part = _zeros1d(n)
+    imag_part = _zeros1d(n)
+    for i in range(n):
+        _flat_set(real_part, i, analytic[i].real)
+        _flat_set(imag_part, i, analytic[i].imaginary)
+    return [real_part, imag_part]

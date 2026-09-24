@@ -1,0 +1,89 @@
+# Copyright (c) TokenVector Project. All rights reserved.
+# Licensed under the MIT License.
+#
+# TV-1001: TokenVector (`.tkv`) translation of the TokenVector.Numerics **Engine** module.
+# Source of truth (C# reference implementation, 1:1 sections):
+#   src/TokenVector.Numerics/Engine/BroadcastEngine.cs -> broadcasting below
+#   src/TokenVector.Numerics/Engine/SIMDKernels.cs     -> contiguous kernels below
+#
+# Fidelity notes:
+#   - The AVX2/FMA `Vector256` fast paths and generic `Vector<T>` fallbacks in
+#     SIMDKernels.cs are hardware-intrinsic code paths outside the TokenVector
+#     language surface (TV-1001 grammar). They collapse to a single scalar
+#     semantics loop here; `tkvc -O simd` lowers these loops to the same
+#     hardware vector registers when targeting x86_64.
+#   - Broadcasting keeps NumPy right-aligned rules and the Stride-0 trick
+#     (zero-copy virtual expansion) exactly as in C#.
+#   - `broadcast_shapes` / `compute_broadcast_strides` are hosted in tv.core so
+#     module imports stay acyclic; tv.engine re-exports them as its surface.
+
+import tv
+from tv.core import NDArray
+
+# ---------------------------------------------------------------------------
+# BroadcastEngine  (Engine/BroadcastEngine.cs)
+# ---------------------------------------------------------------------------
+
+def broadcast_shapes(shape_a, shape_b):
+    # Hosted in tv.core (acyclic import root); re-exported as the Engine surface.
+    return tv.core.broadcast_shapes(shape_a, shape_b)
+
+def compute_broadcast_strides(source_shape, source_strides, target_shape):
+    # Hosted in tv.core (acyclic import root); re-exported as the Engine surface.
+    return tv.core.compute_broadcast_strides(source_shape, source_strides, target_shape)
+
+def broadcast_to(source, target_shape):
+    # Broadcasts an NDArray to a target shape (zero-copy Stride-0 view).
+    strides = compute_broadcast_strides(source.shape, source.strides, target_shape)
+    source.buffer.add_ref()
+    return NDArray(target_shape, buffer=source.buffer, strides=strides,
+                   offset=source.offset, dtype=source.dtype)
+
+def broadcast_pair(a, b):
+    # Broadcasts two NDArrays to a common output shape; returns [left, right].
+    out_shape = broadcast_shapes(a.shape, b.shape)
+    left = broadcast_to(a, out_shape)
+    right = broadcast_to(b, out_shape)
+    return [left, right]
+
+# ---------------------------------------------------------------------------
+# SIMDKernels  (Engine/SIMDKernels.cs) — contiguous elementwise binary ops
+# ---------------------------------------------------------------------------
+
+def add_contiguous(a, b, destination):
+    # destination[i] = a[i] + b[i] (SIMD-lowered by tkvc -O simd).
+    length = len(destination)
+    for i in range(length):
+        destination[i] = a[i] + b[i]
+    return destination
+
+def subtract_contiguous(a, b, destination):
+    # destination[i] = a[i] - b[i].
+    length = len(destination)
+    for i in range(length):
+        destination[i] = a[i] - b[i]
+    return destination
+
+def multiply_contiguous(a, b, destination):
+    # destination[i] = a[i] * b[i].
+    length = len(destination)
+    for i in range(length):
+        destination[i] = a[i] * b[i]
+    return destination
+
+def divide_contiguous(a, b, destination):
+    # destination[i] = a[i] / b[i].
+    length = len(destination)
+    for i in range(length):
+        destination[i] = a[i] / b[i]
+    return destination
+
+def sum_contiguous(source):
+    # Vectorized-lane accumulation with scalar tail (Vector256.Sum semantics).
+    length = len(source)
+    if length == 0:
+        return 0.0
+    total = 0.0
+    for i in range(length):
+        total = total + source[i]
+    return total

@@ -1,0 +1,840 @@
+# Copyright (c) TokenVector Project. All rights reserved.
+# Licensed under the MIT License.
+#
+# TV-1001: TokenVector (`.tkv`) translation of the Ops manipulation + sorting + statistics surface.
+# Source of truth (C# reference implementations, 1:1 sections):
+#   Ops/ManipulationOps.cs -> concatenate, stack, vstack, hstack, split, tile, repeat, pad, roll, flip
+#   Ops/SortingOps.cs      -> sort, argsort, unique, nonzero, clip
+#   Ops/StatisticsOps.cs   -> var, std, median, percentile, cov, corrcoef
+#
+# Fidelity notes:
+#   - All index math (axis normalization, coordinate reconstruction) follows
+#     the C# implementations 1:1, including Tile's left-padded reps and
+#     Percentile's linear interpolation (floor/ceil neighbors).
+
+import tv
+from tv.core import NDArray, BoolNDArray, get_multi_index, broadcast_shapes, shape_total_length
+from tv.linalg import matmul
+
+def _same_shape(a, b):
+    if len(a.shape) != len(b.shape):
+        return False
+    for i in range(len(a.shape)):
+        if a.shape[i] != b.shape[i]:
+            return False
+    return True
+
+def _zeros(shape, dtype="f64"):
+    return NDArray(shape, dtype=dtype)
+
+def _flat_get(arr, i):
+    return arr.get_flat(i)
+
+def _flat_set(arr, i, v):
+    arr.set_flat(i, v)
+
+def _reconstruct_coords(reduced_coords, axis, axis_val):
+    rank = len(reduced_coords) + 1
+    coords = []
+    r_idx = 0
+    for i in range(rank):
+        if i == axis:
+            coords.append(axis_val)
+        else:
+            coords.append(reduced_coords[r_idx])
+            r_idx = r_idx + 1
+    return coords
+
+# ---------------------------------------------------------------------------
+# ManipulationOps  (Ops/ManipulationOps.cs)
+# ---------------------------------------------------------------------------
+
+def concatenate(tensors, axis=0):
+    # Joins tensors along an existing axis: np.concatenate.
+    if len(tensors) == 0:
+        raise ValueError("Tensors list cannot be empty")
+    first = tensors[0]
+    rank = first.rank()
+    if axis < 0:
+        axis = axis + rank
+    if axis < 0 or axis >= rank:
+        raise ValueError("Axis out of range")
+    total_axis_dim = 0
+    for t in tensors:
+        if t.rank() != rank:
+            raise ValueError("All tensors must have the same rank to concatenate")
+        for d in range(rank):
+            if d != axis and t.shape[d] != first.shape[d]:
+                raise ValueError("Shape mismatch at dimension")
+        total_axis_dim = total_axis_dim + t.shape[axis]
+    out_shape = []
+    for d in range(rank):
+        out_shape.append(first.shape[d])
+    out_shape[axis] = total_axis_dim
+    result = _zeros(out_shape)
+    current_offset = 0
+    for t in tensors:
+        t_total = t.total_length
+        for i in range(t_total):
+            src_coords = get_multi_index(i, t.shape)
+            dst_coords = []
+            for d in range(rank):
+                dst_coords.append(src_coords[d])
+            dst_coords[axis] = dst_coords[axis] + current_offset
+            result.set(dst_coords, t.get(src_coords))
+        current_offset = current_offset + t.shape[axis]
+    return result
+
+def stack(tensors, axis=0):
+    # Joins tensors along a new axis: np.stack.
+    if len(tensors) == 0:
+        raise ValueError("Tensors list cannot be empty")
+    first = tensors[0]
+    rank = first.rank()
+    if axis < 0:
+        axis = axis + rank + 1
+    if axis < 0 or axis > rank:
+        raise ValueError("Axis out of range for stack")
+    out_shape = []
+    s_idx = 0
+    for i in range(rank + 1):
+        if i == axis:
+            out_shape.append(len(tensors))
+        else:
+            out_shape.append(first.shape[s_idx])
+            s_idx = s_idx + 1
+    result = _zeros(out_shape)
+    for t_idx in range(len(tensors)):
+        t = tensors[t_idx]
+        if not _same_shape(t, first):
+            raise ValueError("All tensors must have identical shape for stacking")
+        for i in range(t.total_length):
+            src_coords = get_multi_index(i, t.shape)
+            dst_coords = []
+            cur_s = 0
+            for d in range(rank + 1):
+                if d == axis:
+                    dst_coords.append(t_idx)
+                else:
+                    dst_coords.append(src_coords[cur_s])
+                    cur_s = cur_s + 1
+            result.set(dst_coords, t.get(src_coords))
+    return result
+
+def vstack(tensors):
+    # Vertical stack = concatenate along axis 0.
+    return concatenate(tensors, axis=0)
+
+def hstack(tensors):
+    # Horizontal stack = concatenate along axis 1.
+    return concatenate(tensors, axis=1)
+
+def split(tensor, num_sections, axis=0):
+    # Splits tensor into num_sections equal parts along axis: np.split.
+    if axis < 0:
+        axis = axis + tensor.rank()
+    dim_size = tensor.shape[axis]
+    if dim_size % num_sections != 0:
+        raise ValueError("Dimension size not evenly divisible by sections")
+    section_size = dim_size // num_sections
+    results = []
+    for i in range(num_sections):
+        ranges = []
+        for d in range(tensor.rank()):
+            if d == axis:
+                ranges.append([i * section_size, (i + 1) * section_size, 1])
+            else:
+                ranges.append([0, tensor.shape[d], 1])
+        results.append(tensor.slice(ranges).contiguous())
+    return results
+
+def tile(tensor, reps):
+    # Repeats whole dimensions: np.tile.
+    rank = tensor.rank()
+    if len(reps) > rank:
+        rank = len(reps)
+    in_shape = []
+    out_reps = []
+    tensor_diff = rank - tensor.rank()
+    reps_diff = rank - len(reps)
+    for i in range(rank):
+        if i >= tensor_diff:
+            in_shape.append(tensor.shape[i - tensor_diff])
+        else:
+            in_shape.append(1)
+        if i >= reps_diff:
+            out_reps.append(reps[i - reps_diff])
+        else:
+            out_reps.append(1)
+    out_shape = []
+    for i in range(rank):
+        out_shape.append(in_shape[i] * out_reps[i])
+    result = _zeros(out_shape)
+    for i in range(result.total_length):
+        dst_coords = get_multi_index(i, out_shape)
+        src_coords = []
+        for d in range(rank):
+            src_coords.append(dst_coords[d] % in_shape[d])
+        if tensor_diff > 0:
+            orig_coords = []
+            for d in range(tensor_diff, rank):
+                orig_coords.append(src_coords[d])
+            result.set(dst_coords, tensor.get(orig_coords))
+        else:
+            result.set(dst_coords, tensor.get(src_coords))
+    return result
+
+def repeat(tensor, repeats, axis=None):
+    # Repeats elements: np.repeat (flat when axis is None).
+    if repeats < 0:
+        raise ValueError("Repeats cannot be negative")
+    if axis is None:
+        flat = tensor.contiguous()
+        result = _zeros([flat.total_length * repeats])
+        idx = 0
+        for i in range(flat.total_length):
+            val = _flat_get(flat, i)
+            for r in range(repeats):
+                _flat_set(result, idx, val)
+                idx = idx + 1
+        return result
+    ax = axis
+    if ax < 0:
+        ax = ax + tensor.rank()
+    out_shape = []
+    for d in range(tensor.rank()):
+        out_shape.append(tensor.shape[d])
+    out_shape[ax] = out_shape[ax] * repeats
+    res = _zeros(out_shape)
+    for i in range(res.total_length):
+        dst_coords = get_multi_index(i, out_shape)
+        src_coords = []
+        for d in range(tensor.rank()):
+            src_coords.append(dst_coords[d])
+        src_coords[ax] = src_coords[ax] // repeats
+        res.set(dst_coords, tensor.get(src_coords))
+    return res
+
+def pad(tensor, pad_widths, constant_value=0.0):
+    # Constant padding: np.pad. pad_widths = [[before, after], ...] per axis.
+    if len(pad_widths) != tensor.rank():
+        raise ValueError("padWidths length must match tensor rank")
+    out_shape = []
+    for d in range(tensor.rank()):
+        out_shape.append(tensor.shape[d] + pad_widths[d][0] + pad_widths[d][1])
+    result = _zeros(out_shape)
+    for i in range(result.total_length):
+        _flat_set(result, i, constant_value)
+    for i in range(tensor.total_length):
+        src_coords = get_multi_index(i, tensor.shape)
+        dst_coords = []
+        for d in range(tensor.rank()):
+            dst_coords.append(src_coords[d] + pad_widths[d][0])
+        result.set(dst_coords, tensor.get(src_coords))
+    return result
+
+def roll(tensor, shift, axis=None):
+    # Rolls elements along an axis (or flat): np.roll.
+    if axis is None:
+        flat = tensor.contiguous()
+        result = _zeros(tensor.shape)
+        n = flat.total_length
+        actual_shift = ((shift % n) + n) % n
+        for i in range(n):
+            src_idx = (i - actual_shift + n) % n
+            _flat_set(result, i, _flat_get(flat, src_idx))
+        return result
+    ax = axis
+    if ax < 0:
+        ax = ax + tensor.rank()
+    dim_size = tensor.shape[ax]
+    eff_shift = ((shift % dim_size) + dim_size) % dim_size
+    res = _zeros(tensor.shape)
+    for i in range(res.total_length):
+        dst_coords = get_multi_index(i, tensor.shape)
+        src_coords = []
+        for d in range(tensor.rank()):
+            src_coords.append(dst_coords[d])
+        src_coords[ax] = (dst_coords[ax] - eff_shift + dim_size) % dim_size
+        res.set(dst_coords, tensor.get(src_coords))
+    return res
+
+def flip(tensor, axis=0):
+    # Reverses element order along the axis: np.flip.
+    if axis < 0:
+        axis = axis + tensor.rank()
+    dim_size = tensor.shape[axis]
+    result = _zeros(tensor.shape)
+    for i in range(result.total_length):
+        dst_coords = get_multi_index(i, tensor.shape)
+        src_coords = []
+        for d in range(tensor.rank()):
+            src_coords.append(dst_coords[d])
+        src_coords[axis] = dim_size - 1 - dst_coords[axis]
+        result.set(dst_coords, tensor.get(src_coords))
+    return result
+
+# ---------------------------------------------------------------------------
+# SortingOps  (Ops/SortingOps.cs)
+# ---------------------------------------------------------------------------
+
+def sort(tensor, axis=-1, descending=False):
+    # Sorted copy along axis: np.sort.
+    if axis < 0:
+        axis = axis + tensor.rank()
+    axis_size = tensor.shape[axis]
+    result = _zeros(tensor.shape)
+    total_slices = tensor.total_length // axis_size
+    slice_shape = []
+    for d in range(tensor.rank()):
+        if d != axis:
+            slice_shape.append(tensor.shape[d])
+    for s in range(total_slices):
+        slice_coords = get_multi_index(s, slice_shape)
+        line = []
+        for a in range(axis_size):
+            full_coords = _reconstruct_coords(slice_coords, axis, a)
+            line.append(tensor.get(full_coords))
+        line = _sort_values(line, descending)
+        for a in range(axis_size):
+            full_coords = _reconstruct_coords(slice_coords, axis, a)
+            result.set(full_coords, line[a])
+    return result
+
+def argsort(tensor, axis=-1, descending=False):
+    # Indices that would sort along axis: np.argsort (int indices).
+    if axis < 0:
+        axis = axis + tensor.rank()
+    axis_size = tensor.shape[axis]
+    result = _zeros(tensor.shape)
+    total_slices = tensor.total_length // axis_size
+    slice_shape = []
+    for d in range(tensor.rank()):
+        if d != axis:
+            slice_shape.append(tensor.shape[d])
+    for s in range(total_slices):
+        slice_coords = get_multi_index(s, slice_shape)
+        indices = []
+        values = []
+        for a in range(axis_size):
+            indices.append(a)
+            full_coords = _reconstruct_coords(slice_coords, axis, a)
+            values.append(tensor.get(full_coords))
+        # Insertion sort of index/value pairs (stable, mirrors Array.Sort order)
+        for i in range(1, axis_size):
+            key_i = indices[i]
+            key_v = values[key_i]
+            j = i - 1
+            while j >= 0:
+                if descending:
+                    if values[indices[j]] < key_v:
+                        indices[j + 1] = indices[j]
+                        j = j - 1
+                    else:
+                        break
+                else:
+                    if values[indices[j]] > key_v:
+                        indices[j + 1] = indices[j]
+                        j = j - 1
+                    else:
+                        break
+            indices[j + 1] = key_i
+        for a in range(axis_size):
+            full_coords = _reconstruct_coords(slice_coords, axis, a)
+            result.set(full_coords, indices[a])
+    return result
+
+def _sort_values(values, descending):
+    # Insertion sort on plain values (stable, mirrors Array.Sort then Reverse).
+    arr = []
+    for v in values:
+        arr.append(v)
+    for i in range(1, len(arr)):
+        key = arr[i]
+        j = i - 1
+        while j >= 0:
+            if descending:
+                if arr[j] < key:
+                    arr[j + 1] = arr[j]
+                    j = j - 1
+                else:
+                    break
+            else:
+                if arr[j] > key:
+                    arr[j + 1] = arr[j]
+                    j = j - 1
+                else:
+                    break
+        arr[j + 1] = key
+    return arr
+
+def unique(tensor):
+    # Unique sorted elements: np.unique.
+    seen = []
+    for i in range(tensor.total_length):
+        v = tensor.get_flat(i)
+        found = False
+        for s in seen:
+            if s == v:
+                found = True
+                break
+        if not found:
+            seen.append(v)
+    return _from_list(_sort_values(seen, False))
+
+def nonzero(tensor):
+    # Indices of non-zero elements: np.nonzero -> [rank, count].
+    matched = []
+    for i in range(tensor.total_length):
+        coords = get_multi_index(i, tensor.shape)
+        if tensor.get(coords) != 0.0:
+            matched.append(coords)
+    count = len(matched)
+    result = NDArray([tensor.rank(), count])
+    for i in range(count):
+        for r in range(tensor.rank()):
+            result.set([r, i], matched[i][r])
+    return result
+
+def clip(tensor, min_v, max_v):
+    # Clamps values within [min, max]: np.clip.
+    if min_v > max_v:
+        raise ValueError("min cannot be greater than max")
+    result = _zeros(tensor.shape)
+    for i in range(tensor.total_length):
+        val = tensor.get_flat(i)
+        if val < min_v:
+            _flat_set(result, i, min_v)
+        elif val > max_v:
+            _flat_set(result, i, max_v)
+        else:
+            _flat_set(result, i, val)
+    return result
+
+def _from_list(values):
+    result = NDArray([len(values)])
+    for i in range(len(values)):
+        result.buffer.data[result.offset + i] = values[i]
+    return result
+
+# ---------------------------------------------------------------------------
+# StatisticsOps  (Ops/StatisticsOps.cs)
+# ---------------------------------------------------------------------------
+
+def _sqrt(v):
+    est = tv.sqrt(v)
+    if est < 0.0:
+        return 0.0
+    for i in range(2):
+        est = 0.5 * (est + v / est)
+    return est
+
+def _normalize_axis(t, ax):
+    if ax < 0:
+        ax = ax + t.rank()
+    return ax
+
+def _get_reduced_shape(shape, normalized_axis, keepdims):
+    if keepdims:
+        res = []
+        for d in range(len(shape)):
+            res.append(shape[d])
+        res[normalized_axis] = 1
+        return res
+    if len(shape) == 1:
+        return []
+    new_shape = []
+    for i in range(len(shape)):
+        if i != normalized_axis:
+            new_shape.append(shape[i])
+    return new_shape
+
+def var(tensor, axis=None, keepdims=False, ddof=0):
+    # Variance along axis (or global): np.var with ddof.
+    if axis is None:
+        m = 0.0
+        for i in range(tensor.total_length):
+            m = m + tensor.get_flat(i)
+        m = m / tensor.total_length
+        sum_sq = 0.0
+        for i in range(tensor.total_length):
+            diff = tensor.get_flat(i) - m
+            sum_sq = sum_sq + diff * diff
+        divisor = tensor.total_length - ddof
+        if divisor < 1:
+            divisor = 1
+        var_val = sum_sq / divisor
+        if keepdims:
+            return _from_list([var_val]).reshape([1])
+        return _from_list([var_val])
+    ax = _normalize_axis(tensor, axis)
+    # Axis mean broadcast-subtracted
+    mean_t = _axis_mean(tensor, ax)
+    dim_size = tensor.shape[ax]
+    denom = dim_size - ddof
+    if denom < 1:
+        denom = 1
+    out_shape = _get_reduced_shape(tensor.shape, ax, keepdims)
+    result = _zeros(out_shape)
+    lookup_shape = _get_reduced_shape(tensor.shape, ax, False) if keepdims else out_shape
+    for i in range(result.total_length):
+        coords = get_multi_index(i, lookup_shape)
+        acc = 0.0
+        for a in range(dim_size):
+            full_coords = _reconstruct_coords(coords, ax, a)
+            diff = tensor.get(full_coords) - mean_t.get(full_coords)
+            acc = acc + diff * diff
+        result.buffer.data[result.offset + i] = acc / denom
+    return result
+
+def _axis_mean(tensor, ax):
+    # Mean along axis with keepdims=True (helper for var).
+    dim_size = tensor.shape[ax]
+    out_shape = _get_reduced_shape(tensor.shape, ax, True)
+    result = _zeros(out_shape)
+    lookup_shape = _get_reduced_shape(tensor.shape, ax, False)
+    for i in range(result.total_length):
+        coords = get_multi_index(i, lookup_shape)
+        acc = 0.0
+        for a in range(dim_size):
+            full_coords = _reconstruct_coords(coords, ax, a)
+            acc = acc + tensor.get(full_coords)
+        result.buffer.data[result.offset + i] = acc / dim_size
+    return result
+
+def std(tensor, axis=None, keepdims=False, ddof=0):
+    # Standard deviation along axis (or global): np.std.
+    variance = var(tensor, axis, keepdims, ddof)
+    result = _zeros(variance.shape)
+    for i in range(variance.total_length):
+        result.buffer.data[result.offset + i] = _sqrt(variance.buffer.data[variance.offset + i])
+    return result
+
+def median(tensor, axis=None, keepdims=False):
+    # Median = 50th percentile.
+    return percentile(tensor, 50.0, axis, keepdims)
+
+def percentile(tensor, q, axis=None, keepdims=False):
+    # q-th percentile with linear interpolation: np.percentile.
+    if q < 0.0 or q > 100.0:
+        raise ValueError("Percentile q must be in [0, 100]")
+    if axis is None:
+        flat = tensor.contiguous()
+        sorted_v = []
+        for i in range(flat.total_length):
+            sorted_v.append(_flat_get(flat, i))
+        sorted_v = _sort_values(sorted_v, False)
+        n = len(sorted_v)
+        index = (q / 100.0) * (n - 1)
+        low = int(tv.floor(index))
+        high = low
+        if index > low:
+            high = low + 1
+        frac = index - low
+        val = sorted_v[low] + frac * (sorted_v[high] - sorted_v[low])
+        if keepdims:
+            return _from_list([val]).reshape([1])
+        return _from_list([val])
+    ax = _normalize_axis(tensor, axis)
+    axis_size = tensor.shape[ax]
+    sorted_tensor = sort(tensor, ax)
+    out_shape = _get_reduced_shape(tensor.shape, ax, keepdims)
+    result = _zeros(out_shape)
+    target_idx = (q / 100.0) * (axis_size - 1)
+    i_low = int(tv.floor(target_idx))
+    i_high = int(tv.ceil(target_idx))
+    frac_t = target_idx - i_low
+    lookup_shape = _get_reduced_shape(tensor.shape, ax, False) if keepdims else out_shape
+    for i in range(result.total_length):
+        coords = get_multi_index(i, lookup_shape)
+        low_coords = _reconstruct_coords(coords, ax, i_low)
+        high_coords = _reconstruct_coords(coords, ax, i_high)
+        low_val = sorted_tensor.get(low_coords)
+        high_val = sorted_tensor.get(high_coords)
+        result.buffer.data[result.offset + i] = low_val + frac_t * (high_val - low_val)
+    return result
+
+def cov(x):
+    # Sample covariance matrix: np.cov. Input: [variables, observations].
+    if x.rank() != 2:
+        raise ValueError("Cov requires 2D matrix [Variables, Observations]")
+    n_vars = x.shape[0]
+    n_obs = x.shape[1]
+    if n_obs < 2:
+        raise ValueError("Cov requires at least 2 observations")
+    mean_t = _axis_mean_axis1(x)
+    centered = _zeros(x.shape)
+    for i in range(x.total_length):
+        coords = get_multi_index(i, x.shape)
+        centered.set(coords, x.get(coords) - mean_t.get(coords))
+    centered_t = centered.matrix_transpose()
+    c = matmul(centered, centered_t)
+    scale = 1.0 / (n_obs - 1)
+    result = _zeros(c.shape)
+    for i in range(c.total_length):
+        result.buffer.data[result.offset + i] = c.buffer.data[c.offset + i] * scale
+    return result
+
+def _axis_mean_axis1(x):
+    # Row means (axis=1, keepdims) for cov.
+    n_obs = x.shape[1]
+    result = _zeros([x.shape[0], 1])
+    for r in range(x.shape[0]):
+        acc = 0.0
+        for c in range(n_obs):
+            acc = acc + x.get([r, c])
+        result.set([r, 0], acc / n_obs)
+    return result
+
+def corrcoef(x):
+    # Pearson correlation coefficients matrix: np.corrcoef.
+    c = cov(x)
+    n = c.shape[0]
+    corr = _zeros([n, n])
+    stds = []
+    for i in range(n):
+        stds.append(_sqrt(c.get([i, i])))
+    for i in range(n):
+        for j in range(n):
+            denom = stds[i] * stds[j]
+            if denom > 0.0:
+                corr.set([i, j], c.get([i, j]) / denom)
+            else:
+                corr.set([i, j], 0.0)
+    return corr
+
+# ---------------------------------------------------------------------------
+# NumPy-parity gap fill  (array ops, post TV-1001 audit)
+# ---------------------------------------------------------------------------
+
+def array_split(tensor, sections, axis=0):
+    # np.array_split: near-equal sections (earlier ones get the remainder).
+    norm_axis = _normalize_axis(tensor, axis)
+    axis_size = tensor.shape[norm_axis]
+    base = axis_size // sections
+    extra = axis_size % sections
+    result = []
+    start = 0
+    for s in range(sections):
+        length = base + (1 if s < extra else 0)
+        ranges = []
+        for d in range(tensor.rank()):
+            if d == norm_axis:
+                ranges.append([start, start + length, 1])
+            else:
+                ranges.append([0, tensor.shape[d], 1])
+        result.append(tensor.slice(ranges).contiguous())
+        start = start + length
+    return result
+
+def dsplit(tensor, sections):
+    # np.dsplit: split along axis 2 (requires rank >= 3).
+    if tensor.rank() < 3:
+        raise ValueError("dsplit requires a tensor of rank >= 3")
+    return array_split(tensor, sections, 2)
+
+def delete(tensor, flat_indices):
+    # np.delete with axis=None: flattened copy without the given positions.
+    drop = []
+    for i in range(flat_indices.total_length):
+        idx = int(flat_indices.get_flat(i))
+        if idx < 0:
+            idx = idx + tensor.total_length
+        drop.append(idx)
+    keep = []
+    for i in range(tensor.total_length):
+        dropped = False
+        for d in range(len(drop)):
+            if drop[d] == i:
+                dropped = True
+                break
+        if not dropped:
+            keep.append(tensor.get_flat(i))
+    result = NDArray([len(keep)], dtype=tensor.dtype)
+    for i in range(len(keep)):
+        result.buffer.data[result.offset + i] = keep[i]
+    return result
+
+def argwhere(condition):
+    # np.argwhere: [K, rank] coordinates where the boolean tensor is true.
+    rank = len(condition.shape)
+    count = 0
+    for i in range(condition.total_length):
+        if condition.buffer[condition.offset + i]:
+            count = count + 1
+    result = NDArray([count, rank])
+    row = 0
+    for i in range(condition.total_length):
+        if condition.buffer[condition.offset + i]:
+            coords = get_multi_index(i, condition.shape)
+            for d in range(rank):
+                result.set([row, d], coords[d])
+            row = row + 1
+    return result
+
+def apply_over_axes(func, a, axes):
+    # np.apply_over_axes(func, a, axes): fold func(a, axis) over the axes.
+    current = a
+    for i in range(len(axes)):
+        current = func(current, axes[i])
+    return current
+
+def trim_zeros(tensor):
+    # np.trim_zeros: drop leading/trailing zeros of a 1D tensor.
+    if tensor.rank() != 1:
+        raise ValueError("trim_zeros requires a 1D tensor")
+    start = 0
+    while start < tensor.total_length and tensor.get_flat(start) == 0.0:
+        start = start + 1
+    end = tensor.total_length
+    while end > start and tensor.get_flat(end - 1) == 0.0:
+        end = end - 1
+    result = NDArray([end - start], dtype=tensor.dtype)
+    for i in range(end - start):
+        result.buffer.data[result.offset + i] = tensor.get_flat(start + i)
+    return result
+
+def broadcast_arrays(a, b):
+    # np.broadcast_arrays: both operands viewed at the common shape.
+    out_shape = broadcast_shapes(a.shape, b.shape)
+    return [a.broadcast_to(out_shape), b.broadcast_to(out_shape)]
+
+def indices(shape):
+    # np.indices: [rank, *shape] grid where [d, coords] = coords[d].
+    rank = len(shape)
+    out_shape = []
+    out_shape.append(rank)
+    for d in range(rank):
+        out_shape.append(shape[d])
+    result = NDArray(out_shape)
+    total = shape_total_length(shape)
+    for i in range(total):
+        coords = get_multi_index(i, shape)
+        for d in range(rank):
+            dst = [d]
+            for c in range(rank):
+                dst.append(coords[c])
+            result.set(dst, coords[d])
+    return result
+
+def shape_total_length_m(shape):
+    total = 1
+    for i in range(len(shape)):
+        total = total * shape[i]
+    return total
+
+def _unique_core(tensor):
+    # Shared engine for the unique_* family.
+    # -> [values(sorted unique), first_index, inverse_index, counts]
+    flat = []
+    for i in range(tensor.total_length):
+        flat.append(tensor.get_flat(i))
+    order = []
+    for i in range(len(flat)):
+        order.append(i)
+    # Stable insertion sort by value (small-N semantics identical to np.unique).
+    for i in range(1, len(order)):
+        key = order[i]
+        j = i - 1
+        while j >= 0 and flat[order[j]] > flat[key]:
+            order[j + 1] = order[j]
+            j = j - 1
+        order[j + 1] = key
+    values = []
+    counts = []
+    first_idx = []
+    inverse = [0] * len(flat)
+    for k in range(len(order)):
+        i = order[k]
+        if len(values) == 0 or flat[i] != values[len(values) - 1]:
+            values.append(flat[i])
+            counts.append(1)
+            first_idx.append(i)
+        else:
+            counts[len(counts) - 1] = counts[len(counts) - 1] + 1
+        inverse[i] = len(values) - 1
+    values_t = NDArray([len(values)], dtype=tensor.dtype)
+    counts_t = NDArray([len(counts)])
+    first_t = NDArray([len(first_idx)])
+    inverse_t = NDArray([len(inverse)])
+    for i in range(len(values)):
+        values_t.buffer.data[values_t.offset + i] = values[i]
+        counts_t.buffer.data[counts_t.offset + i] = counts[i]
+        first_t.buffer.data[first_t.offset + i] = first_idx[i]
+    for i in range(len(inverse)):
+        inverse_t.buffer.data[inverse_t.offset + i] = inverse[i]
+    return [values_t, first_t, inverse_t, counts_t]
+
+def unique_values(tensor):
+    # np.unique_values: sorted unique elements.
+    return _unique_core(tensor)[0]
+
+def unique_counts(tensor):
+    # np.unique_counts: count of each unique element.
+    return _unique_core(tensor)[3]
+
+def unique_inverse(tensor):
+    # np.unique_inverse: index of each element inside the unique values.
+    return _unique_core(tensor)[2]
+
+def unique_all(tensor):
+    # np.unique_all -> [values, indices(first occurrence), inverse, counts].
+    core = _unique_core(tensor)
+    return [core[0], core[1], core[2], core[3]]
+
+def sort_complex(a):
+    # np.sort_complex on an [N, 2] (re, im) tensor: by real, then imaginary.
+    if a.rank() != 2 or a.shape[1] != 2:
+        raise ValueError("sort_complex requires an [N, 2] tensor")
+    pairs = []
+    for i in range(a.shape[0]):
+        pairs.append([a.get([i, 0]), a.get([i, 1])])
+    for i in range(1, len(pairs)):
+        key = pairs[i]
+        j = i - 1
+        while j >= 0 and (pairs[j][0] > key[0] or (pairs[j][0] == key[0] and pairs[j][1] > key[1])):
+            pairs[j + 1] = pairs[j]
+            j = j - 1
+        pairs[j + 1] = key
+    result = NDArray([len(pairs), 2], dtype=a.dtype)
+    for i in range(len(pairs)):
+        result.set([i, 0], pairs[i][0])
+        result.set([i, 1], pairs[i][1])
+    return result
+
+def _bit_at(bits, pos):
+    # Reads one boolean element from an NDArray (float 0/1) or a BoolNDArray
+    # (NDArray.buffer is a TensorBuffer, BoolNDArray.buffer is a plain list).
+    if getattr(bits.buffer, "data", None) is not None:
+        return bits.get_flat(pos) != 0.0
+    return bits.buffer[bits.offset + pos]
+
+def packbits(bits):
+    # np.packbits (bitorder='big'): 8 boolean elements -> one byte.
+    n = bits.total_length
+    out_len = (n + 7) // 8
+    result = NDArray([out_len])
+    for b in range(out_len):
+        byte_v = 0
+        for bit in range(8):
+            pos = b * 8 + bit
+            if pos < n and _bit_at(bits, pos):
+                byte_v = byte_v + _pow2_int_m(7 - bit)
+        result.buffer.data[result.offset + b] = byte_v
+    return result
+
+def _pow2_int_m(e):
+    v = 1
+    for i in range(e):
+        v = v * 2
+    return v
+
+def unpackbits(packed):
+    # np.unpackbits (bitorder='big'): one byte -> 8 boolean elements.
+    result = BoolNDArray([packed.total_length * 8])
+    for b in range(packed.total_length):
+        byte_v = int(packed.get_flat(b))
+        for bit in range(8):
+            mask = _pow2_int_m(7 - bit)
+            result.buffer[result.offset + b * 8 + bit] = (byte_v // mask) % 2 == 1
+    return result

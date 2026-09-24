@@ -1,0 +1,997 @@
+# Copyright (c) TokenVector Project. All rights reserved.
+# Licensed under the MIT License.
+#
+# TV-1001: TokenVector (`.tkv`) translation of the **Autograd** module.
+# Source of truth (C# reference implementations, 1:1 sections):
+#   Autograd/Tensor.cs                          -> class Tensor
+#   Autograd/AutogradNode.cs                    -> class AutogradNode + unbroadcast
+#   Autograd/Nodes/MathAndMatrixNodes.cs        -> add/sub/mul/div/neg/pow/exp/log/matmul/transpose/reshape nodes
+#   Autograd/Nodes/ActivationAndReductionNodes.cs -> relu/sigmoid/tanh/gelu/softmax/sum/mean + mse/cross-entropy losses
+#   Autograd/Optim/Optimizers.cs                -> SGD, AdamW (decoupled weight decay)
+#   Autograd/NN/Modules.cs                      -> Module, Linear (Kaiming-uniform), Sequential, RMSNorm
+#
+# Fidelity notes:
+#   - Reverse-mode VJP over the dynamic DAG with topological ordering is kept
+#     exactly, including Unbroadcast (sum over extra leading dims, then over
+#     broadcast singleton dims).
+#   - Softmax uses the numerically stable form exp(x - max)/sum(exp(x - max)).
+#   - AdamW keeps bias-correction (beta^t) and decoupled weight decay order:
+#     decay applies BEFORE moment updates, matching Loshchilov & Hutter / C#.
+#   - GELU uses the tanh approximation with the exact C# constants
+#     (sqrt(2/pi), 0.044715).
+
+import tv
+from tv.core import NDArray
+from tv.linalg import matmul
+import tv.ops as ops
+
+# ---------------------------------------------------------------------------
+# AutogradNode  (Autograd/AutogradNode.cs)
+# ---------------------------------------------------------------------------
+
+class AutogradNode:
+    # Base class for backward execution nodes in the Dynamic Compute Graph.
+    def __init__(self, inputs):
+        self.inputs = inputs
+        self.output = None
+
+    def backward(self, grad_output):
+        raise ValueError("Backward must be implemented by subclass")
+
+    def get_parent_nodes(self):
+        parents = []
+        for i in range(len(self.inputs)):
+            input_t = self.inputs[i]
+            if input_t is not None and input_t.grad_fn is not None:
+                parents.append(input_t.grad_fn)
+        return parents
+
+def unbroadcast(grad, target_shape):
+    # Reduces/unbroadcasts a gradient to the original pre-broadcast shape.
+    same = len(grad.shape) == len(target_shape)
+    if same:
+        for i in range(len(target_shape)):
+            if grad.shape[i] != target_shape[i]:
+                same = False
+                break
+    if same:
+        return grad.clone()
+
+    if len(target_shape) == 0 or (len(target_shape) == 1 and target_shape[0] == 1 and grad.total_length > 1):
+        sum_val = ops.sum(grad)
+        return _full(sum_val, target_shape)
+
+    current = grad
+    # 1. Sum over extra leading dimensions.
+    while current.rank() > len(target_shape):
+        current = ops.sum_axis(current, 0, keepdims=False)
+    # 2. Sum along dims where target is 1 but grad is > 1.
+    for i in range(len(target_shape)):
+        if target_shape[i] == 1 and current.shape[i] > 1:
+            current = ops.sum_axis(current, i, keepdims=True)
+    same = len(current.shape) == len(target_shape)
+    if same:
+        for i in range(len(target_shape)):
+            if current.shape[i] != target_shape[i]:
+                same = False
+                break
+    if not same:
+        current = current.reshape(target_shape)
+    if not current.is_contiguous:
+        current = current.contiguous()
+    return current
+
+def _full(value, shape):
+    result = NDArray(shape)
+    for i in range(result.total_length):
+        result.buffer.data[result.offset + i] = value
+    return result
+
+def _is_tensor(v):
+    # Structural type test standing in for the C# `other is Tensor<T>` overload
+    # dispatch. TV-1001 has no isinstance; Tensors carry the class constant
+    # IS_TENSOR (probed with getattr default False) — unambiguous because no
+    # scalar or NDArray defines it, and truthiness is fixed at True.
+    return getattr(v, "IS_TENSOR", False)
+
+# ---------------------------------------------------------------------------
+# Tensor  (Autograd/Tensor.cs)
+# ---------------------------------------------------------------------------
+
+class Tensor:
+    # Differentiable tensor with Dynamic Compute Graph (Reverse-Mode Autograd).
+    # TV-1001 note: class constant used by _is_tensor for structural type tests
+    # (the C# overload dispatch `other is Tensor<T>` has no isinstance analog).
+    IS_TENSOR = True
+
+    def __init__(self, data, requires_grad=False, grad_fn=None):
+        self.data = data
+        self.grad = None
+        self.requires_grad = requires_grad
+        self.grad_fn = grad_fn
+        self.is_leaf = grad_fn is None
+
+    def shape(self):
+        return self.data.shape
+
+    def rank(self):
+        return self.data.rank()
+
+    def total_length(self):
+        return self.data.total_length
+
+    # -- Factories ------------------------------------------------------------
+
+    @staticmethod
+    def from_ndarray(data, requires_grad=False):
+        return Tensor(data, requires_grad)
+
+    @staticmethod
+    def zeros(shape):
+        return Tensor(NDArray(shape), requires_grad=False)
+
+    @staticmethod
+    def ones(shape):
+        result = NDArray(shape)
+        for i in range(result.total_length):
+            result.buffer.data[result.offset + i] = 1.0
+        return Tensor(result, requires_grad=False)
+
+    @staticmethod
+    def full(value, shape):
+        return Tensor(_full(value, shape), requires_grad=False)
+
+    @staticmethod
+    def uniform(shape, min_v=0.0, max_v=1.0, seed=None, requires_grad=False):
+        rnd = _Rand(seed)
+        length = 1
+        for d in range(len(shape)):
+            length = length * shape[d]
+        values = NDArray(shape)
+        range_v = max_v - min_v
+        for i in range(length):
+            values.buffer.data[values.offset + i] = min_v + rnd.next_double() * range_v
+        return Tensor(values, requires_grad=requires_grad)
+
+    @staticmethod
+    def randn(shape, mean=0.0, std_dev=1.0, seed=None, requires_grad=False):
+        rnd = _Rand(seed)
+        length = 1
+        for d in range(len(shape)):
+            length = length * shape[d]
+        arr = NDArray(shape)
+        i = 0
+        while i < length:
+            u1 = 1.0 - rnd.next_double()
+            u2 = 1.0 - rnd.next_double()
+            rand_std_normal = tv.sqrt(-2.0 * tv.log(u1)) * tv.sin(2.0 * 3.14159265358979323846 * u2)
+            arr.buffer.data[arr.offset + i] = mean + std_dev * rand_std_normal
+            if i + 1 < length:
+                rand_std_normal2 = tv.sqrt(-2.0 * tv.log(u1)) * tv.cos(2.0 * 3.14159265358979323846 * u2)
+                arr.buffer.data[arr.offset + i + 1] = mean + std_dev * rand_std_normal2
+            i = i + 2
+        return Tensor(arr, requires_grad=requires_grad)
+
+    # -- Gradient management ---------------------------------------------------
+
+    def accumulate_grad(self, grad):
+        # Accumulates incoming gradient into this tensor's grad buffer.
+        if not self.requires_grad:
+            return
+        if self.grad is None:
+            self.grad = grad.clone()
+        else:
+            self.grad = ops.add(self.grad, grad)
+
+    def zero_grad(self):
+        self.grad = None
+
+    def detach(self):
+        return Tensor(self.data.clone(), requires_grad=False, grad_fn=None)
+
+    def backward(self, gradient=None):
+        # Reverse-mode AD via topological sort on the dynamic DAG.
+        if gradient is not None:
+            init_grad = gradient.data
+        else:
+            if self.total_length() != 1:
+                raise ValueError("Implicit backward() can only be called on scalar tensors")
+            init_grad = _full(1.0, self.data.shape)
+
+        self.accumulate_grad(init_grad)
+
+        topo_order = []
+        visited = []
+        self._build_topo(self.grad_fn, topo_order, visited)
+
+        for i in range(len(topo_order) - 1, -1, -1):
+            node = topo_order[i]
+            if node.output is not None and node.output.grad is not None:
+                node.backward(node.output.grad)
+
+    def _build_topo(self, node, topo_order, visited):
+        if node is None:
+            return
+        for v in visited:
+            if v is node:
+                return
+        visited.append(node)
+        parents = node.get_parent_nodes()
+        for p_idx in range(len(parents)):
+            self._build_topo(parents[p_idx], topo_order, visited)
+        topo_order.append(node)
+
+    # -- Operators (Tensor @ Tensor) -------------------------------------------
+
+    # TV-1001 note: the C# `other is Tensor<T>` overload dispatch becomes a
+    # structural check via _is_tensor (Tensors carry requires_grad; scalars
+    # and NDArrays do not).
+    def __add__(self, other):
+        if _is_tensor(other):
+            return add(self, other)
+        return add_scalar(self, other)
+
+    def __radd__(self, other):
+        return add_scalar(self, other)
+
+    def __sub__(self, other):
+        if _is_tensor(other):
+            return subtract(self, other)
+        return subtract_scalar(self, other)
+
+    def __rsub__(self, other):
+        return subtract_from_scalar(self, other)
+
+    def __mul__(self, other):
+        if _is_tensor(other):
+            return multiply(self, other)
+        return multiply_scalar(self, other)
+
+    def __rmul__(self, other):
+        return multiply_scalar(self, other)
+
+    def __truediv__(self, other):
+        if _is_tensor(other):
+            return divide(self, other)
+        return divide_scalar(self, other)
+
+    def __rtruediv__(self, other):
+        return divide_from_scalar(self, other)
+
+    def __neg__(self):
+        return negate(self)
+
+    # -- Tensor operations & autograd methods -----------------------------------
+
+    def matmul(self, other):
+        return matmul_tensor(self, other)
+
+    def transpose(self, axis0=0, axis1=1):
+        return transpose_tensor(self, axis0, axis1)
+
+    def reshape(self, new_shape):
+        return reshape_tensor(self, new_shape)
+
+    def sum(self, axis=-1, keepdims=False):
+        return sum_tensor(self, axis, keepdims)
+
+    def mean(self, axis=-1, keepdims=False):
+        return mean_tensor(self, axis, keepdims)
+
+    def relu(self):
+        return relu(self)
+
+    def sigmoid(self):
+        return sigmoid(self)
+
+    def tanh(self):
+        return tanh(self)
+
+    def gelu(self):
+        return gelu(self)
+
+    def softmax(self, axis=-1):
+        return softmax(self, axis)
+
+    def pow(self, power):
+        return pow(self, power)
+
+    def exp(self):
+        return exp(self)
+
+    def log(self):
+        return log(self)
+
+    def to_string(self):
+        return "Tensor(shape=[" + _join_ints(self.data.shape) + "], requires_grad=" + _bool_str(self.requires_grad) + ")\n" + self.data.to_string()
+
+class _Rand:
+    # Deterministic LCG RNG for reproducible factory initialization.
+    def __init__(self, seed):
+        if seed is None:
+            seed = 42
+        self.state = seed % 2147483647
+        if self.state <= 0:
+            self.state = self.state + 2147483646
+
+    def next_double(self):
+        self.state = (self.state * 16807) % 2147483647
+        return (self.state - 1) / 2147483646.0
+
+def _join_ints(values):
+    out = ""
+    for i in range(len(values)):
+        if i > 0:
+            out = out + ", "
+        out = out + str(values[i])
+    return out
+
+def _bool_str(v):
+    if v:
+        return "true"
+    return "false"
+
+# ---------------------------------------------------------------------------
+# Math & Matrix nodes  (Autograd/Nodes/MathAndMatrixNodes.cs)
+# ---------------------------------------------------------------------------
+
+class _AddNode(AutogradNode):
+    def backward(self, grad_output):
+        if self.inputs[0].requires_grad:
+            self.inputs[0].accumulate_grad(unbroadcast(grad_output, self.inputs[0].data.shape))
+        if self.inputs[1].requires_grad:
+            self.inputs[1].accumulate_grad(unbroadcast(grad_output, self.inputs[1].data.shape))
+
+def add(a, b):
+    out_data = ops.add(a.data, b.data)
+    requires_grad = a.requires_grad or b.requires_grad
+    node = _AddNode([a, b]) if requires_grad else None
+    result = Tensor(out_data, requires_grad, node)
+    if node is not None:
+        node.output = result
+    return result
+
+def add_scalar(a, b):
+    b_tensor = Tensor.full(b, [1])
+    return add(a, b_tensor)
+
+class _SubNode(AutogradNode):
+    def backward(self, grad_output):
+        if self.inputs[0].requires_grad:
+            self.inputs[0].accumulate_grad(unbroadcast(grad_output, self.inputs[0].data.shape))
+        if self.inputs[1].requires_grad:
+            self.inputs[1].accumulate_grad(unbroadcast(ops.neg(grad_output), self.inputs[1].data.shape))
+
+def subtract(a, b):
+    out_data = ops.sub(a.data, b.data)
+    requires_grad = a.requires_grad or b.requires_grad
+    node = _SubNode([a, b]) if requires_grad else None
+    result = Tensor(out_data, requires_grad, node)
+    if node is not None:
+        node.output = result
+    return result
+
+def subtract_scalar(a, b):
+    b_tensor = Tensor.full(b, [1])
+    return subtract(a, b_tensor)
+
+def subtract_from_scalar(b, a):
+    a_tensor = Tensor.full(a, [1])
+    return subtract(a_tensor, b)
+
+class _MulNode(AutogradNode):
+    def backward(self, grad_output):
+        if self.inputs[0].requires_grad:
+            self.inputs[0].accumulate_grad(unbroadcast(ops.mul(grad_output, self.inputs[1].data), self.inputs[0].data.shape))
+        if self.inputs[1].requires_grad:
+            self.inputs[1].accumulate_grad(unbroadcast(ops.mul(grad_output, self.inputs[0].data), self.inputs[1].data.shape))
+
+def multiply(a, b):
+    out_data = ops.mul(a.data, b.data)
+    requires_grad = a.requires_grad or b.requires_grad
+    node = _MulNode([a, b]) if requires_grad else None
+    result = Tensor(out_data, requires_grad, node)
+    if node is not None:
+        node.output = result
+    return result
+
+def multiply_scalar(a, b):
+    b_tensor = Tensor.full(b, [1])
+    return multiply(a, b_tensor)
+
+class _DivNode(AutogradNode):
+    def backward(self, grad_output):
+        if self.inputs[0].requires_grad:
+            self.inputs[0].accumulate_grad(unbroadcast(ops.div(grad_output, self.inputs[1].data), self.inputs[0].data.shape))
+        if self.inputs[1].requires_grad:
+            b_data = self.inputs[1].data
+            grad_b = ops.div(ops.mul(ops.neg(grad_output), self.inputs[0].data), ops.mul(b_data, b_data))
+            self.inputs[1].accumulate_grad(unbroadcast(grad_b, self.inputs[1].data.shape))
+
+def divide(a, b):
+    out_data = ops.div(a.data, b.data)
+    requires_grad = a.requires_grad or b.requires_grad
+    node = _DivNode([a, b]) if requires_grad else None
+    result = Tensor(out_data, requires_grad, node)
+    if node is not None:
+        node.output = result
+    return result
+
+def divide_scalar(a, b):
+    b_tensor = Tensor.full(b, [1])
+    return divide(a, b_tensor)
+
+def divide_from_scalar(b, a):
+    a_tensor = Tensor.full(a, [1])
+    return divide(a_tensor, b)
+
+class _NegNode(AutogradNode):
+    def backward(self, grad_output):
+        if self.inputs[0].requires_grad:
+            self.inputs[0].accumulate_grad(ops.neg(grad_output))
+
+def negate(a):
+    out_data = ops.neg(a.data)
+    node = _NegNode([a]) if a.requires_grad else None
+    result = Tensor(out_data, a.requires_grad, node)
+    if node is not None:
+        node.output = result
+    return result
+
+class _PowNode(AutogradNode):
+    def __init__(self, a, power):
+        AutogradNode.__init__(self, [a])
+        self.power = power
+
+    def backward(self, grad_output):
+        if self.inputs[0].requires_grad:
+            # d/dx (x^p) = p * x^(p-1)
+            p_minus1 = self.power - 1.0
+            in_data = self.inputs[0].data
+            grad_nd = NDArray(in_data.shape)
+            for i in range(in_data.total_length):
+                x = in_data.buffer.data[in_data.offset + i]
+                g = grad_output.buffer.data[grad_output.offset + i]
+                grad_nd.buffer.data[grad_nd.offset + i] = g * self.power * _pow_scalar(x, p_minus1)
+            self.inputs[0].accumulate_grad(grad_nd)
+
+def _pow_scalar(x, p):
+    if x == 0.0:
+        return 0.0
+    return tv.exp(p * tv.log(tv.abs(x) if x < 0.0 else x))
+
+def pow(a, power):
+    out_nd = NDArray(a.data.shape)
+    for i in range(a.data.total_length):
+        x = a.data.buffer.data[a.data.offset + i]
+        out_nd.buffer.data[out_nd.offset + i] = _pow_scalar(x, power)
+    node = _PowNode(a, power) if a.requires_grad else None
+    result = Tensor(out_nd, a.requires_grad, node)
+    if node is not None:
+        node.output = result
+    return result
+
+class _ExpNode(AutogradNode):
+    def backward(self, grad_output):
+        if self.inputs[0].requires_grad and self.output is not None:
+            # d/dx (exp(x)) = exp(x) = Output
+            self.inputs[0].accumulate_grad(ops.mul(grad_output, self.output.data))
+
+def exp(a):
+    out_nd = NDArray(a.data.shape)
+    for i in range(a.data.total_length):
+        out_nd.buffer.data[out_nd.offset + i] = tv.exp(a.data.buffer.data[a.data.offset + i])
+    node = _ExpNode([a]) if a.requires_grad else None
+    result = Tensor(out_nd, a.requires_grad, node)
+    if node is not None:
+        node.output = result
+    return result
+
+class _LogNode(AutogradNode):
+    def backward(self, grad_output):
+        if self.inputs[0].requires_grad:
+            # d/dx (log(x)) = 1 / x
+            self.inputs[0].accumulate_grad(ops.div(grad_output, self.inputs[0].data))
+
+def log(a):
+    out_nd = NDArray(a.data.shape)
+    for i in range(a.data.total_length):
+        out_nd.buffer.data[out_nd.offset + i] = tv.log(a.data.buffer.data[a.data.offset + i])
+    node = _LogNode([a]) if a.requires_grad else None
+    result = Tensor(out_nd, a.requires_grad, node)
+    if node is not None:
+        node.output = result
+    return result
+
+class _MatMulNode(AutogradNode):
+    def backward(self, grad_output):
+        a = self.inputs[0]
+        b = self.inputs[1]
+        if a.requires_grad:
+            b_t = b.data.transpose(0, 1)
+            grad_a = matmul(grad_output, b_t)
+            a.accumulate_grad(unbroadcast(grad_a, a.data.shape))
+        if b.requires_grad:
+            a_t = a.data.transpose(0, 1)
+            grad_b = matmul(a_t, grad_output)
+            b.accumulate_grad(unbroadcast(grad_b, b.data.shape))
+
+def matmul_tensor(a, b):
+    out_data = matmul(a.data, b.data)
+    requires_grad = a.requires_grad or b.requires_grad
+    node = _MatMulNode([a, b]) if requires_grad else None
+    result = Tensor(out_data, requires_grad, node)
+    if node is not None:
+        node.output = result
+    return result
+
+class _TransposeNode(AutogradNode):
+    def __init__(self, a, axis0, axis1):
+        AutogradNode.__init__(self, [a])
+        self.axis0 = axis0
+        self.axis1 = axis1
+
+    def backward(self, grad_output):
+        if self.inputs[0].requires_grad:
+            grad_a = grad_output.transpose(self.axis0, self.axis1)
+            if not grad_a.is_contiguous:
+                grad_a = grad_a.contiguous()
+            self.inputs[0].accumulate_grad(grad_a)
+
+def transpose_tensor(a, axis0=0, axis1=1):
+    out_data = a.data.transpose(axis0, axis1)
+    node = _TransposeNode(a, axis0, axis1) if a.requires_grad else None
+    result = Tensor(out_data, a.requires_grad, node)
+    if node is not None:
+        node.output = result
+    return result
+
+class _ReshapeNode(AutogradNode):
+    def backward(self, grad_output):
+        if self.inputs[0].requires_grad:
+            grad_a = grad_output.reshape(self.inputs[0].data.shape)
+            if not grad_a.is_contiguous:
+                grad_a = grad_a.contiguous()
+            self.inputs[0].accumulate_grad(grad_a)
+
+def reshape_tensor(a, new_shape):
+    out_data = a.data.reshape(new_shape)
+    node = _ReshapeNode([a]) if a.requires_grad else None
+    result = Tensor(out_data, a.requires_grad, node)
+    if node is not None:
+        node.output = result
+    return result
+
+# ---------------------------------------------------------------------------
+# Activation & reduction nodes  (Autograd/Nodes/ActivationAndReductionNodes.cs)
+# ---------------------------------------------------------------------------
+
+class _ReluNode(AutogradNode):
+    def backward(self, grad_output):
+        if self.inputs[0].requires_grad:
+            input_t = self.inputs[0].data
+            grad_a = NDArray(input_t.shape)
+            for i in range(input_t.total_length):
+                v = input_t.buffer.data[input_t.offset + i]
+                g = grad_output.buffer.data[grad_output.offset + i]
+                if v > 0.0:
+                    grad_a.buffer.data[grad_a.offset + i] = g
+                else:
+                    grad_a.buffer.data[grad_a.offset + i] = 0.0
+            self.inputs[0].accumulate_grad(grad_a)
+
+def relu(a):
+    out_nd = NDArray(a.data.shape)
+    for i in range(a.data.total_length):
+        v = a.data.buffer.data[a.data.offset + i]
+        if v > 0.0:
+            out_nd.buffer.data[out_nd.offset + i] = v
+        else:
+            out_nd.buffer.data[out_nd.offset + i] = 0.0
+    node = _ReluNode([a]) if a.requires_grad else None
+    result = Tensor(out_nd, a.requires_grad, node)
+    if node is not None:
+        node.output = result
+    return result
+
+class _SigmoidNode(AutogradNode):
+    def backward(self, grad_output):
+        if self.inputs[0].requires_grad and self.output is not None:
+            # d/dx sigmoid(x) = sigmoid(x) * (1 - sigmoid(x))
+            out_data = self.output.data
+            grad_a = ops.mul(grad_output, _one_minus_mul(out_data))
+            self.inputs[0].accumulate_grad(grad_a)
+
+def _one_minus(t):
+    # 1 - t elementwise.
+    result = NDArray(t.shape)
+    for i in range(t.total_length):
+        result.buffer.data[result.offset + i] = 1.0 - t.buffer.data[t.offset + i]
+    return result
+
+def _one_minus_mul(t):
+    # out * (1 - out), computed in-place-style without extra operator calls.
+    result = NDArray(t.shape)
+    for i in range(t.total_length):
+        v = t.buffer.data[t.offset + i]
+        result.buffer.data[result.offset + i] = v * (1.0 - v)
+    return result
+
+def sigmoid(a):
+    out_nd = NDArray(a.data.shape)
+    for i in range(a.data.total_length):
+        v = a.data.buffer.data[a.data.offset + i]
+        out_nd.buffer.data[out_nd.offset + i] = 1.0 / (1.0 + tv.exp(-v))
+    node = _SigmoidNode([a]) if a.requires_grad else None
+    result = Tensor(out_nd, a.requires_grad, node)
+    if node is not None:
+        node.output = result
+    return result
+
+class _TanhNode(AutogradNode):
+    def backward(self, grad_output):
+        if self.inputs[0].requires_grad and self.output is not None:
+            # d/dx tanh(x) = 1 - tanh(x)^2
+            out_data = self.output.data
+            grad_a = ops.mul(grad_output, _one_minus(ops.mul(out_data, out_data)))
+            self.inputs[0].accumulate_grad(grad_a)
+
+def tanh(a):
+    out_nd = NDArray(a.data.shape)
+    for i in range(a.data.total_length):
+        out_nd.buffer.data[out_nd.offset + i] = tv.tanh(a.data.buffer.data[a.data.offset + i])
+    node = _TanhNode([a]) if a.requires_grad else None
+    result = Tensor(out_nd, a.requires_grad, node)
+    if node is not None:
+        node.output = result
+    return result
+
+class _GeluNode(AutogradNode):
+    def backward(self, grad_output):
+        if self.inputs[0].requires_grad:
+            in_data = self.inputs[0].data
+            grad_nd = NDArray(in_data.shape)
+            sqrt2_over_pi = tv.sqrt(2.0 / 3.14159265358979323846)
+            coeff = 0.044715
+            half = 0.5
+            for i in range(in_data.total_length):
+                x = in_data.buffer.data[in_data.offset + i]
+                g = grad_output.buffer.data[grad_output.offset + i]
+                inner = sqrt2_over_pi * (x + coeff * x * x * x)
+                tanh_inner = tv.tanh(inner)
+                d_inner = sqrt2_over_pi * (1.0 + 3.0 * coeff * x * x)
+                d_gelu = half * (1.0 + tanh_inner) + half * x * (1.0 - tanh_inner * tanh_inner) * d_inner
+                grad_nd.buffer.data[grad_nd.offset + i] = g * d_gelu
+            self.inputs[0].accumulate_grad(grad_nd)
+
+def gelu(a):
+    out_nd = NDArray(a.data.shape)
+    sqrt2_over_pi = tv.sqrt(2.0 / 3.14159265358979323846)
+    coeff = 0.044715
+    half = 0.5
+    for i in range(a.data.total_length):
+        x = a.data.buffer.data[a.data.offset + i]
+        inner = sqrt2_over_pi * (x + coeff * x * x * x)
+        out_nd.buffer.data[out_nd.offset + i] = half * x * (1.0 + tv.tanh(inner))
+    node = _GeluNode([a]) if a.requires_grad else None
+    result = Tensor(out_nd, a.requires_grad, node)
+    if node is not None:
+        node.output = result
+    return result
+
+class _SoftmaxNode(AutogradNode):
+    def __init__(self, a, axis):
+        AutogradNode.__init__(self, [a])
+        self.axis = axis
+
+    def backward(self, grad_output):
+        if self.inputs[0].requires_grad and self.output is not None:
+            # gradInput = S * (gradOutput - sum(gradOutput * S, axis, keepdims=True))
+            s = self.output.data
+            dot_sum = ops.sum_axis(ops.mul(grad_output, s), self.axis, keepdims=True)
+            grad_a = ops.mul(s, ops.sub(grad_output, dot_sum))
+            self.inputs[0].accumulate_grad(grad_a)
+
+def softmax(a, axis=-1):
+    norm_axis = axis
+    if axis < 0:
+        norm_axis = a.rank() + axis
+    # Numerically stable: S = exp(x - max(x)) / sum(exp(x - max(x)))
+    max_nd = ops.max_axis(a.data, norm_axis, keepdims=True)
+    diff = ops.sub(a.data, max_nd)
+    exp_nd = NDArray(diff.shape)
+    for i in range(diff.total_length):
+        exp_nd.buffer.data[exp_nd.offset + i] = tv.exp(diff.buffer.data[diff.offset + i])
+    sum_nd = ops.sum_axis(exp_nd, norm_axis, keepdims=True)
+    out_nd = ops.div(exp_nd, sum_nd)
+    node = _SoftmaxNode(a, norm_axis) if a.requires_grad else None
+    result = Tensor(out_nd, a.requires_grad, node)
+    if node is not None:
+        node.output = result
+    return result
+
+class _SumNode(AutogradNode):
+    def backward(self, grad_output):
+        if self.inputs[0].requires_grad:
+            if grad_output.total_length == 1:
+                grad_nd = _full(grad_output.buffer.data[grad_output.offset], self.inputs[0].data.shape)
+            else:
+                grad_nd = ops.add(NDArray(self.inputs[0].data.shape), grad_output)
+            self.inputs[0].accumulate_grad(grad_nd)
+
+def sum_tensor(a, axis=-1, keepdims=False):
+    if axis == -1 and not keepdims:
+        sum_val = ops.sum(a.data)
+        out_nd = _full(sum_val, [1])
+        node = _SumNode([a]) if a.requires_grad else None
+        result = Tensor(out_nd, a.requires_grad, node)
+        if node is not None:
+            node.output = result
+        return result
+    norm_axis = axis
+    if axis < 0:
+        norm_axis = a.rank() + axis
+    axis_sum = ops.sum_axis(a.data, norm_axis, keepdims)
+    node = _SumNode([a]) if a.requires_grad else None
+    result = Tensor(axis_sum, a.requires_grad, node)
+    if node is not None:
+        node.output = result
+    return result
+
+class _MeanNode(AutogradNode):
+    def __init__(self, a, scale):
+        AutogradNode.__init__(self, [a])
+        self.scale = scale
+
+    def backward(self, grad_output):
+        if self.inputs[0].requires_grad:
+            if grad_output.total_length == 1:
+                grad_nd = _full(grad_output.buffer.data[grad_output.offset] / self.scale, self.inputs[0].data.shape)
+            else:
+                grad_nd = ops.div_scalar(ops.add(NDArray(self.inputs[0].data.shape), grad_output), self.scale)
+            self.inputs[0].accumulate_grad(grad_nd)
+
+def mean_tensor(a, axis=-1, keepdims=False):
+    if axis == -1 and not keepdims:
+        mean_val = ops.mean(a.data)
+        out_nd = _full(mean_val, [1])
+        scale = a.total_length()
+        node = _MeanNode(a, scale) if a.requires_grad else None
+        result = Tensor(out_nd, a.requires_grad, node)
+        if node is not None:
+            node.output = result
+        return result
+    norm_axis = axis
+    if axis < 0:
+        norm_axis = a.rank() + axis
+    axis_mean = ops.mean_axis(a.data, norm_axis, keepdims)
+    dim_scale = a.data.shape[norm_axis]
+    node = _MeanNode(a, dim_scale) if a.requires_grad else None
+    result = Tensor(axis_mean, a.requires_grad, node)
+    if node is not None:
+        node.output = result
+    return result
+
+# ---------------------------------------------------------------------------
+# Losses  (ActivationAndReductionNodes.cs #region Losses)
+# ---------------------------------------------------------------------------
+
+def mse_loss(y_pred, y_true):
+    # L = Mean((yPred - yTrue)^2).
+    diff = subtract(y_pred, y_true)
+    sq = multiply(diff, diff)
+    return mean_tensor(sq, -1, False)
+
+def cross_entropy_loss(logits, target_one_hot):
+    # L = -Mean(sum(target * log_softmax(pred), axis=-1)).
+    probs = softmax(logits, -1)
+    eps = 1e-12
+    probs_eps = add_scalar(probs, eps)
+    log_probs = log(probs_eps)
+    weighted = multiply(target_one_hot, log_probs)
+    summed = sum_tensor(weighted, -1, False)
+    loss = negate(mean_tensor(summed, -1, False))
+    return loss
+
+# ---------------------------------------------------------------------------
+# Optimizers  (Autograd/Optim/Optimizers.cs)
+# ---------------------------------------------------------------------------
+# TV-1001 note: the C# Dictionary<Tensor<T>, NDArray<T>> per-parameter state
+# maps to index-aligned parallel lists (_velocities / _exp_avg / _exp_avg_sq),
+# one entry per parameter, initialized to None and filled on first step.
+
+class Optimizer:
+    # Base class for all tensor gradient optimization algorithms.
+    def __init__(self, parameters):
+        self.parameters = []
+        for p in parameters:
+            self.parameters.append(p)
+
+    def zero_grad(self):
+        for i in range(len(self.parameters)):
+            self.parameters[i].zero_grad()
+
+    def step(self):
+        raise ValueError("Step must be implemented by subclass")
+
+class SGD(Optimizer):
+    # Stochastic Gradient Descent with optional momentum and weight decay.
+    def __init__(self, parameters, lr=0.01, momentum=0.0, weight_decay=0.0):
+        Optimizer.__init__(self, parameters)
+        self.lr = lr
+        self.momentum = momentum
+        self.weight_decay = weight_decay
+        self.velocities = []  # per-parameter state, index-aligned with parameters
+        for _i in range(len(self.parameters)):
+            self.velocities.append(None)
+
+    def step(self):
+        for idx in range(len(self.parameters)):
+            p = self.parameters[idx]
+            if p.grad is None:
+                continue
+            if self.momentum > 0.0:
+                v = self.velocities[idx]
+                if v is None:
+                    v = NDArray(p.data.shape)
+                    self.velocities[idx] = v
+                for i in range(p.data.total_length):
+                    d_idx = p.data.offset + i
+                    g_idx = p.grad.offset + i
+                    grad = p.grad.buffer.data[g_idx]
+                    if self.weight_decay > 0.0:
+                        grad = grad + self.weight_decay * p.data.buffer.data[d_idx]
+                    v.buffer.data[v.offset + i] = self.momentum * v.buffer.data[v.offset + i] + grad
+                    p.data.buffer.data[d_idx] = p.data.buffer.data[d_idx] - self.lr * v.buffer.data[v.offset + i]
+            else:
+                for i in range(p.data.total_length):
+                    d_idx = p.data.offset + i
+                    g_idx = p.grad.offset + i
+                    grad = p.grad.buffer.data[g_idx]
+                    if self.weight_decay > 0.0:
+                        grad = grad + self.weight_decay * p.data.buffer.data[d_idx]
+                    p.data.buffer.data[d_idx] = p.data.buffer.data[d_idx] - self.lr * grad
+
+class AdamW(Optimizer):
+    # AdamW with decoupled weight decay (Loshchilov & Hutter).
+    def __init__(self, parameters, lr=0.001, beta1=0.9, beta2=0.999, eps=1e-8, weight_decay=0.01):
+        Optimizer.__init__(self, parameters)
+        self.lr = lr
+        self.beta1 = beta1
+        self.beta2 = beta2
+        self.eps = eps
+        self.weight_decay = weight_decay
+        self.step_count = 0
+        self.exp_avg = []  # per-parameter state, index-aligned with parameters
+        self.exp_avg_sq = []  # per-parameter state, index-aligned with parameters
+        for _i in range(len(self.parameters)):
+            self.exp_avg.append(None)
+            self.exp_avg_sq.append(None)
+
+    def step(self):
+        self.step_count = self.step_count + 1
+        one_minus_beta1 = 1.0 - self.beta1
+        one_minus_beta2 = 1.0 - self.beta2
+        # Bias correction factors
+        bias_correction1 = 1.0 - _pow_f(self.beta1, self.step_count)
+        bias_correction2 = 1.0 - _pow_f(self.beta2, self.step_count)
+        for idx in range(len(self.parameters)):
+            p = self.parameters[idx]
+            if p.grad is None:
+                continue
+            m = self.exp_avg[idx]
+            if m is None:
+                m = NDArray(p.data.shape)
+                self.exp_avg[idx] = m
+            v = self.exp_avg_sq[idx]
+            if v is None:
+                v = NDArray(p.data.shape)
+                self.exp_avg_sq[idx] = v
+            for i in range(p.data.total_length):
+                d_idx = p.data.offset + i
+                g_idx = p.grad.offset + i
+                m_idx = m.offset + i
+                v_idx = v.offset + i
+                # 1. Decoupled weight decay
+                if self.weight_decay > 0.0:
+                    p.data.buffer.data[d_idx] = p.data.buffer.data[d_idx] - self.lr * self.weight_decay * p.data.buffer.data[d_idx]
+                grad = p.grad.buffer.data[g_idx]
+                # 2. Update biased 1st moment estimate
+                m.buffer.data[m_idx] = self.beta1 * m.buffer.data[m_idx] + one_minus_beta1 * grad
+                # 3. Update biased 2nd raw moment estimate
+                v.buffer.data[v_idx] = self.beta2 * v.buffer.data[v_idx] + one_minus_beta2 * (grad * grad)
+                # 4. Bias-corrected moments
+                m_hat = m.buffer.data[m_idx] / bias_correction1
+                v_hat = v.buffer.data[v_idx] / bias_correction2
+                # 5. Parameter update
+                step = self.lr * m_hat / (tv.sqrt(v_hat) + self.eps)
+                p.data.buffer.data[d_idx] = p.data.buffer.data[d_idx] - step
+
+def _pow_f(base, exponent):
+    return tv.exp(exponent * tv.log(base))
+
+# ---------------------------------------------------------------------------
+# NN Modules  (Autograd/NN/Modules.cs)
+# ---------------------------------------------------------------------------
+
+class Module:
+    # Base class for all neural network layers and composite modules.
+    def forward(self, input_t):
+        raise ValueError("Forward must be implemented by subclass")
+
+    def parameters(self):
+        return []
+
+    def zero_grad(self):
+        params = self.parameters()
+        for i in range(len(params)):
+            params[i].zero_grad()
+
+class Linear(Module):
+    # Fully connected layer: Y = X @ W + b (Kaiming/He uniform init).
+    def __init__(self, in_features, out_features, has_bias=True, seed=None):
+        self.in_features = in_features
+        self.out_features = out_features
+        bound = 1.0 / tv.sqrt(in_features)
+        self.weight = Tensor.uniform([in_features, out_features], -bound, bound, seed, requires_grad=True)
+        self.bias = None
+        if has_bias:
+            bias_seed = None
+            if seed is not None:
+                bias_seed = seed + 1
+            self.bias = Tensor.uniform([1, out_features], -bound, bound, bias_seed, requires_grad=True)
+
+    def forward(self, input_t):
+        output = input_t.matmul(self.weight)
+        if self.bias is not None:
+            output = add(output, self.bias)
+        return output
+
+    def parameters(self):
+        params = [self.weight]
+        if self.bias is not None:
+            params.append(self.bias)
+        return params
+
+class Sequential(Module):
+    # Cascades multiple modules in order.
+    def __init__(self, modules=None):
+        self.modules = []
+        if modules is not None:
+            for m in modules:
+                self.modules.append(m)
+
+    def add(self, module):
+        self.modules.append(module)
+
+    def forward(self, input_t):
+        current = input_t
+        for i in range(len(self.modules)):
+            current = self.modules[i].forward(current)
+        return current
+
+    def parameters(self):
+        params = []
+        for i in range(len(self.modules)):
+            sub = self.modules[i].parameters()
+            for j in range(len(sub)):
+                params.append(sub[j])
+        return params
+
+class RMSNorm(Module):
+    # Root Mean Square Layer Normalization for LLMs & Transformers.
+    def __init__(self, dim, eps=1e-6):
+        self.eps = eps
+        self.weight = Tensor.ones([1, dim])
+        self.weight.requires_grad = True
+
+    def forward(self, input_t):
+        # rms = sqrt(mean(x^2, axis=-1, keepdims=true) + eps)
+        x2 = multiply(input_t, input_t)
+        mean_x2 = mean_tensor(x2, -1, True)
+        rms = pow(add_scalar(mean_x2, self.eps), 0.5)
+        norm = divide(input_t, rms)
+        return multiply(norm, self.weight)
+
+    def parameters(self):
+        return [self.weight]

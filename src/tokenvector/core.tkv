@@ -1,0 +1,811 @@
+# Copyright (c) TokenVector Project. All rights reserved.
+# Licensed under the MIT License.
+#
+# TV-1001: TokenVector (`.tkv`) translation of the TokenVector.Numerics **Core** module.
+# Source of truth (C# reference implementation, 1:1 sections):
+#   src/TokenVector.Numerics/Core/ShapeHelper.cs      -> shape helpers below
+#   src/TokenVector.Numerics/Core/TensorBuffer.cs     -> class TensorBuffer
+#   src/TokenVector.Numerics/Core/NDArray.cs          -> class NDArray
+#   src/TokenVector.Numerics/Core/BoolNDArray.cs      -> class BoolNDArray
+#   src/TokenVector.Numerics/Core/ShapeExtensions.cs  -> expand/squeeze/at_least_*/ravel
+#
+# Fidelity notes:
+#   - C# `NDArray<T>` is generic over unmanaged numeric types; the TokenVector
+#     stdlib `NDArray` is dtype-dynamic (f32/f64/i32/i64), matching the
+#     `tv.array(...)` / `tv.tensor(...)` surface in TOKENVECTOR_SYNTAX_SPEC.md.
+#   - C# `unsafe` pointer paths (`GetUnsafePointer`, `NativeMemory.AllocZeroed`)
+#     map to the native-allocation `with` block defined by the spec
+#     (`with tv.allocate_native(shape, dtype=...) as buf:`), which disposes the
+#     underlying TensorBuffer immediately when the block exits.
+#   - Zero-copy semantics (Slice/Permute/BroadcastTo share the parent buffer and
+#     bump its refcount) are preserved exactly as in C#.
+
+import tv
+
+# ---------------------------------------------------------------------------
+# Broadcast shape helpers  (Engine/BroadcastEngine.cs)
+# ---------------------------------------------------------------------------
+# Hosted in tv.core (instead of tv.engine) so that every stdlib module can
+# import them without a cycle: tv.engine re-exports these as its public
+# surface, and NDArray.broadcast_to / module-level broadcast use them below.
+
+def broadcast_shapes(shape_a, shape_b):
+    # Computes the broadcasted output shape (NumPy right-aligned rules).
+    rank_a = len(shape_a)
+    rank_b = len(shape_b)
+    max_rank = rank_a
+    if rank_b > max_rank:
+        max_rank = rank_b
+    out_shape = []
+    for i in range(max_rank):
+        out_shape.append(1)
+    for i in range(max_rank):
+        if i < rank_a:
+            dim_a = shape_a[rank_a - 1 - i]
+        else:
+            dim_a = 1
+        if i < rank_b:
+            dim_b = shape_b[rank_b - 1 - i]
+        else:
+            dim_b = 1
+        if dim_a == dim_b or dim_a == 1 or dim_b == 1:
+            out_shape[max_rank - 1 - i] = max(dim_a, dim_b)
+        else:
+            raise ValueError("Cannot broadcast shapes with incompatible dimensions")
+    return out_shape
+
+def compute_broadcast_strides(source_shape, source_strides, target_shape):
+    # Computes broadcast strides using the Stride-0 trick for singleton dims.
+    src_rank = len(source_shape)
+    target_rank = len(target_shape)
+    broadcast_strides = []
+    for i in range(target_rank):
+        broadcast_strides.append(0)
+    rank_diff = target_rank - src_rank
+    for i in range(target_rank):
+        if i < rank_diff:
+            broadcast_strides[i] = 0  # leading dims added by broadcasting
+        else:
+            src_idx = i - rank_diff
+            src_dim = source_shape[src_idx]
+            target_dim = target_shape[i]
+            if src_dim == target_dim:
+                broadcast_strides[i] = source_strides[src_idx]
+            elif src_dim == 1:
+                broadcast_strides[i] = 0  # virtual expansion, zero RAM copy
+            else:
+                raise ValueError("Incompatible dimension at axis " + str(i))
+    return broadcast_strides
+
+# ---------------------------------------------------------------------------
+# ShapeHelper  (Core/ShapeHelper.cs)
+# ---------------------------------------------------------------------------
+
+def shape_total_length(shape):
+    # Computes total number of elements in a tensor shape (0-dim scalar -> 1).
+    if len(shape) == 0:
+        return 1
+    total = 1
+    for i in range(len(shape)):
+        if shape[i] < 0:
+            raise ValueError("Dimension size cannot be negative")
+        total = total * shape[i]
+    return total
+
+def row_major_strides(shape):
+    # Computes standard C-contiguous row-major strides for a given shape.
+    if len(shape) == 0:
+        return []
+    strides = []
+    for i in range(len(shape)):
+        strides.append(0)
+    stride = 1
+    for i in range(len(shape) - 1, -1, -1):
+        strides[i] = stride
+        stride = stride * shape[i]
+    return strides
+
+def is_contiguous(shape, strides):
+    # True when the layout is standard C-contiguous without holes/overlaps.
+    if len(shape) == 0:
+        return True
+    expected = 1
+    for i in range(len(shape) - 1, -1, -1):
+        if shape[i] == 0:
+            return True
+        if shape[i] == 1:
+            continue  # single-element dims never break contiguity
+        if strides[i] != expected:
+            return False
+        expected = expected * shape[i]
+    return True
+
+def get_flat_index(indices, strides, offset):
+    # Converts N-dimensional coordinates to a flat buffer offset.
+    flat = offset
+    for i in range(len(indices)):
+        flat = flat + indices[i] * strides[i]
+    return flat
+
+def get_multi_index(linear_index, shape):
+    # Converts a 1D flat offset into N-dimensional row-major coordinates.
+    coords = []
+    for i in range(len(shape)):
+        coords.append(0)
+    rem = linear_index
+    for i in range(len(shape) - 1, -1, -1):
+        dim = shape[i]
+        if dim == 0:
+            coords[i] = 0
+            continue
+        coords[i] = rem % dim
+        rem = rem // dim
+    return coords
+
+def permute_shape_strides(shape, strides, axes):
+    # Computes new shape+strides for a permutation of axes (validated).
+    if len(axes) != len(shape):
+        raise ValueError("Number of axes in permutation must match tensor rank")
+    visited = []
+    for i in range(len(shape)):
+        visited.append(False)
+    new_shape = []
+    new_strides = []
+    for i in range(len(axes)):
+        axis = axes[i]
+        if axis < 0 or axis >= len(shape) or visited[axis]:
+            raise ValueError("Invalid or duplicate axis in permutation")
+        visited[axis] = True
+        new_shape.append(shape[axis])
+        new_strides.append(strides[axis])
+    return new_shape, new_strides
+
+def slice_view_params(shape, strides, offset, ranges):
+    # Computes zero-copy slice parameters (new shape, strides, buffer offset).
+    # `ranges` is a list of [start, stop, step] triples (one per sliced axis).
+    if len(ranges) > len(shape):
+        raise ValueError("Too many slice dimensions specified")
+    new_shape = []
+    new_strides = []
+    new_offset = offset
+    for i in range(len(shape)):
+        dim = shape[i]
+        stride = strides[i]
+        if i >= len(ranges):
+            new_shape.append(dim)
+            new_strides.append(stride)
+            continue
+        start = ranges[i][0]
+        stop = ranges[i][1]
+        step = ranges[i][2]
+        if step == 0:
+            raise ValueError("Slice step cannot be zero")
+        if start < 0:
+            start = dim + start
+            if start < 0:
+                start = 0
+        if stop < 0:
+            stop = dim + stop
+            if stop < 0:
+                stop = 0
+        start = clamp_int(start, 0, dim)
+        stop = clamp_int(stop, 0, dim)
+        if step > 0:
+            new_strides.append(stride * step)
+            if start >= stop:
+                new_shape.append(0)
+            else:
+                new_shape.append((stop - start + step - 1) // step)
+                new_offset = new_offset + start * stride
+        else:
+            new_strides.append(stride * step)
+            if start <= stop:
+                new_shape.append(0)
+            else:
+                new_shape.append((start - stop - step - 1) // (-step))
+                new_offset = new_offset + start * stride
+    return new_shape, new_strides, new_offset
+
+def clamp_int(value, low, high):
+    if value < low:
+        return low
+    if value > high:
+        return high
+    return value
+
+# ---------------------------------------------------------------------------
+# TensorBuffer  (Core/TensorBuffer.cs)
+# ---------------------------------------------------------------------------
+
+class TensorBuffer:
+    # Hybrid storage: managed GC array OR native unmanaged block, with
+    # reference-counted zero-copy views (parent/shared lifetime in C#).
+    def __init__(self, length, data=None, is_native=False):
+        if data is None:
+            data = []
+            for i in range(length):
+                data.append(0.0)
+        self.data = data
+        self.length = length
+        self.is_native = is_native
+        self.ref_count = 1
+        self.is_disposed = False
+
+    def add_ref(self):
+        self.ref_count = self.ref_count + 1
+
+    def get(self, index):
+        if self.is_disposed:
+            raise ValueError("TensorBuffer is disposed")
+        if index < 0 or index >= self.length:
+            raise IndexError("Index out of buffer range")
+        return self.data[index]
+
+    def set(self, index, value):
+        if self.is_disposed:
+            raise ValueError("TensorBuffer is disposed")
+        if index < 0 or index >= self.length:
+            raise IndexError("Index out of buffer range")
+        self.data[index] = value
+
+    def to_list(self, offset=0, length=-1):
+        if length < 0:
+            length = self.length - offset
+        out = []
+        for i in range(length):
+            out.append(self.data[offset + i])
+        return out
+
+    def clone(self):
+        buf = TensorBuffer(self.length)
+        for i in range(self.length):
+            buf.data[i] = self.data[i]
+        return buf
+
+    def dispose(self):
+        # Refcounted release; native blocks are freed when refcount hits 0.
+        if self.is_disposed:
+            return
+        self.ref_count = self.ref_count - 1
+        if self.ref_count <= 0:
+            self.is_disposed = True
+            self.data = []
+
+def make_buffer_from_list(values):
+    return TensorBuffer(len(values), data=values)
+
+def make_native_buffer(length):
+    # Mirrors TensorBuffer<T>.AllocateNative: zero-initialized native block.
+    return TensorBuffer(length, is_native=True)
+
+# ---------------------------------------------------------------------------
+# NDArray  (Core/NDArray.cs)
+# ---------------------------------------------------------------------------
+
+class NDArray:
+    # N-Dimensional Array tensor engine for TokenVector (dtype-dynamic port of
+    # NDArray<T>): shape/strides/offset view model over a TensorBuffer.
+    def __init__(self, shape, buffer=None, strides=None, offset=0, dtype="f64"):
+        self.shape = []
+        for i in range(len(shape)):
+            self.shape.append(shape[i])
+        self.total_length = shape_total_length(self.shape)
+        if buffer is None:
+            buffer = TensorBuffer(self.total_length)
+            self.strides = row_major_strides(self.shape)
+            self.offset = 0
+        else:
+            if strides is None:
+                strides = row_major_strides(self.shape)
+            self.strides = []
+            for i in range(len(strides)):
+                self.strides.append(strides[i])
+            self.offset = offset
+        self.buffer = buffer
+        self.is_contiguous = is_contiguous(self.shape, self.strides)
+        self.dtype = dtype
+
+    def rank(self):
+        return len(self.shape)
+
+    # -- Indexers -----------------------------------------------------------
+
+    def get(self, coords):
+        # N-dimensional read: a.get([i, j, k]).
+        if len(coords) != len(self.shape):
+            raise ValueError("Index rank does not match tensor rank")
+        flat = self.offset
+        for i in range(len(coords)):
+            if coords[i] < 0 or coords[i] >= self.shape[i]:
+                raise IndexError("Index out of range")
+            flat = flat + coords[i] * self.strides[i]
+        return self.buffer.get(flat)
+
+    def set(self, coords, value):
+        # N-dimensional write: a.set([i, j, k], v).
+        if len(coords) != len(self.shape):
+            raise ValueError("Index rank does not match tensor rank")
+        flat = self.offset
+        for i in range(len(coords)):
+            if coords[i] < 0 or coords[i] >= self.shape[i]:
+                raise IndexError("Index out of range")
+            flat = flat + coords[i] * self.strides[i]
+        self.buffer.set(flat, value)
+
+    def get_flat(self, index):
+        # Fast 1D read over the logical (possibly strided) element order.
+        if index < 0 or index >= self.total_length:
+            raise IndexError("Index out of range")
+        if self.is_contiguous and self.offset == 0:
+            return self.buffer.get(index)
+        return self.get(get_multi_index(index, self.shape))
+
+    def set_flat(self, index, value):
+        if index < 0 or index >= self.total_length:
+            raise IndexError("Index out of range")
+        if self.is_contiguous and self.offset == 0:
+            self.buffer.set(index, value)
+            return
+        self.set(get_multi_index(index, self.shape), value)
+
+    # -- Zero-copy views & transformations ----------------------------------
+
+    def slice(self, ranges):
+        # Zero-copy slice: a.slice([[0, 2, 1], [1, 3, 1]]) ~ a[0:2, 1:3].
+        shape, strides, offset = slice_view_params(self.shape, self.strides, self.offset, ranges)
+        self.buffer.add_ref()
+        return NDArray(shape, buffer=self.buffer, strides=strides, offset=offset, dtype=self.dtype)
+
+    def permute(self, axes):
+        # Zero-copy axis permutation.
+        shape, strides = permute_shape_strides(self.shape, self.strides, axes)
+        self.buffer.add_ref()
+        return NDArray(shape, buffer=self.buffer, strides=strides, offset=self.offset, dtype=self.dtype)
+
+    def transpose(self, axis0=0, axis1=1):
+        # Swaps two axes (zero-copy).
+        axes = []
+        for i in range(self.rank()):
+            axes.append(i)
+        tmp = axes[axis0]
+        axes[axis0] = axes[axis1]
+        axes[axis1] = tmp
+        return self.permute(axes)
+
+    def matrix_transpose(self):
+        # 2D-style transpose: swaps the last two axes.
+        if self.rank() < 2:
+            return self
+        return self.transpose(self.rank() - 2, self.rank() - 1)
+
+    def reshape(self, new_shape):
+        new_total = shape_total_length(new_shape)
+        if new_total != self.total_length:
+            raise ValueError("Cannot reshape: total size mismatch")
+        if self.is_contiguous:
+            self.buffer.add_ref()
+            return NDArray(new_shape, buffer=self.buffer, strides=row_major_strides(new_shape),
+                           offset=self.offset, dtype=self.dtype)
+        contig = self.contiguous()
+        return contig.reshape(new_shape)
+
+    def contiguous(self):
+        # Returns a C-contiguous version (copies when strided).
+        if self.is_contiguous and self.offset == 0 and self.buffer.length == self.total_length:
+            return self
+        result = NDArray(self.shape, dtype=self.dtype)
+        if self.rank() == 1:
+            for i in range(self.total_length):
+                result.buffer.data[i] = self.buffer.get(self.offset + i * self.strides[0])
+        else:
+            for i in range(self.total_length):
+                result.buffer.data[i] = self.get(get_multi_index(i, self.shape))
+        return result
+
+    def broadcast_to(self, target_shape):
+        # Zero-copy broadcast via the Stride-0 trick (Engine module).
+        strides = compute_broadcast_strides(self.shape, self.strides, target_shape)
+        self.buffer.add_ref()
+        return NDArray(target_shape, buffer=self.buffer, strides=strides, offset=self.offset, dtype=self.dtype)
+
+    def clone(self):
+        # Deep copy.
+        contig = self.contiguous()
+        clone_buffer = contig.buffer.clone()
+        return NDArray(self.shape, buffer=clone_buffer, strides=row_major_strides(self.shape),
+                       offset=0, dtype=self.dtype)
+
+    # -- Direct memory access ------------------------------------------------
+
+    def as_list(self):
+        # Contiguous flat view as a plain list (mirrors AsSpan copy-free use).
+        if not self.is_contiguous:
+            raise ValueError("as_list() requires a contiguous tensor; call contiguous() first")
+        return self.buffer.to_list(self.offset, self.total_length)
+
+    # -- Factories ------------------------------------------------------------
+
+    def to_list(self):
+        out = []
+        for i in range(self.total_length):
+            out.append(self.get_flat(i))
+        return out
+
+    def to_string(self):
+        parts = "NDArray(shape=["
+        for i in range(len(self.shape)):
+            if i > 0:
+                parts = parts + ", "
+            parts = parts + str(self.shape[i])
+        parts = parts + "], dtype=" + self.dtype + "): ["
+        count = self.total_length
+        if count > 100:
+            count = 100
+        for i in range(count):
+            if i > 0:
+                parts = parts + ", "
+            parts = parts + str(self.get_flat(i))
+        if self.total_length > 100:
+            parts = parts + ", ..."
+        parts = parts + "]"
+        return parts
+
+    def dispose(self):
+        self.buffer.dispose()
+
+# -- Factory functions (spec surface: tv.zeros / tv.ones / tv.full / ...) ----
+
+def zeros(shape, dtype="f64"):
+    return NDArray(shape, dtype=dtype)
+
+def ones(shape, dtype="f64"):
+    result = NDArray(shape, dtype=dtype)
+    fill(result, 1.0)
+    return result
+
+def full(value, shape, dtype="f64"):
+    result = NDArray(shape, dtype=dtype)
+    fill(result, value)
+    return result
+
+def fill(arr, value):
+    for i in range(arr.total_length):
+        arr.buffer.data[arr.offset + i] = value
+    return arr
+
+def eye(size, dtype="f64"):
+    return eye_rc(size, size, dtype=dtype)
+
+def eye_rc(rows, cols, dtype="f64"):
+    result = NDArray([rows, cols], dtype=dtype)
+    n = rows
+    if cols < n:
+        n = cols
+    for i in range(n):
+        result.set([i, i], 1.0)
+    return result
+
+def arange(start, stop, step):
+    if step == 0:
+        raise ValueError("Step cannot be zero")
+    values = []
+    v = start
+    if step > 0:
+        while v < stop:
+            values.append(v)
+            v = v + step
+    else:
+        while v > stop:
+            values.append(v)
+            v = v + step
+    return from_array(values, [len(values)])
+
+def linspace(start, stop, num):
+    if num <= 0:
+        raise ValueError("num must be positive")
+    if num == 1:
+        return from_array([start], [1])
+    values = []
+    step = (stop - start) / (num - 1)
+    for i in range(num):
+        values.append(start + i * step)
+    return from_array(values, [num])
+
+def from_array(values, shape):
+    # tv.array([1.0, 2.0, 3.0], shape=[2, 3]) equivalent.
+    total = shape_total_length(shape)
+    if len(values) != total:
+        raise ValueError("Array length does not match shape total size")
+    data = []
+    for i in range(len(values)):
+        data.append(values[i])
+    buffer = make_buffer_from_list(data)
+    return NDArray(shape, buffer=buffer, strides=row_major_strides(shape), offset=0)
+
+def allocate_native(shape, dtype="f64"):
+    # `with tv.allocate_native([1024, 1024], dtype=tv.f32) as buf:` entry point.
+    total = shape_total_length(shape)
+    buffer = make_native_buffer(total)
+    return NDArray(shape, buffer=buffer, strides=row_major_strides(shape), offset=0, dtype=dtype)
+
+# ---------------------------------------------------------------------------
+# BoolNDArray  (Core/BoolNDArray.cs)
+# ---------------------------------------------------------------------------
+
+class BoolNDArray:
+    # N-Dimensional boolean array for masking and logical indexing.
+    def __init__(self, shape):
+        self.shape = []
+        for i in range(len(shape)):
+            self.shape.append(shape[i])
+        self.total_length = shape_total_length(self.shape)
+        self.strides = row_major_strides(self.shape)
+        self.offset = 0
+        self.buffer = []
+        for i in range(self.total_length):
+            self.buffer.append(False)
+
+    def get(self, coords):
+        flat = self.offset
+        for i in range(len(coords)):
+            flat = flat + coords[i] * self.strides[i]
+        return self.buffer[flat]
+
+    def set(self, coords, value):
+        flat = self.offset
+        for i in range(len(coords)):
+            flat = flat + coords[i] * self.strides[i]
+        self.buffer[flat] = value
+
+    def to_list(self):
+        return self.buffer[self.offset:self.offset + self.total_length]
+
+    def logical_and(self, other):
+        return bool_logical_op(self, other, "and")
+
+    def logical_or(self, other):
+        return bool_logical_op(self, other, "or")
+
+    def logical_not(self):
+        result = BoolNDArray(self.shape)
+        for i in range(self.total_length):
+            result.buffer[i] = not self.buffer[self.offset + i]
+        return result
+
+    def to_string(self):
+        return "BoolNDArray(count=" + str(self.total_length) + ")"
+
+def bool_logical_op(a, b, op):
+    out_shape = broadcast_shapes(a.shape, b.shape)
+    res = BoolNDArray(out_shape)
+    for i in range(res.total_length):
+        coords = get_multi_index(i, out_shape)
+        if op == "and":
+            res.buffer[i] = a.get(coords) and b.get(coords)
+        else:
+            res.buffer[i] = a.get(coords) or b.get(coords)
+    return res
+
+# ---------------------------------------------------------------------------
+# ShapeExtensions  (Core/ShapeExtensions.cs)
+# ---------------------------------------------------------------------------
+
+def expand_dims(arr, axis):
+    rank = arr.rank()
+    if axis < 0:
+        axis = axis + rank + 1
+    if axis < 0 or axis > rank:
+        raise ValueError("Axis out of range for expand_dims")
+    new_shape = []
+    src = 0
+    for i in range(rank + 1):
+        if i == axis:
+            new_shape.append(1)
+        else:
+            new_shape.append(arr.shape[src])
+            src = src + 1
+    return arr.reshape(new_shape)
+
+def squeeze(arr, axis=None):
+    if axis is not None:
+        if axis < 0:
+            axis = axis + arr.rank()
+        if axis < 0 or axis >= arr.rank():
+            raise ValueError("Axis out of range for squeeze")
+        if arr.shape[axis] != 1:
+            raise ValueError("Cannot squeeze dimension of size != 1")
+        new_shape = []
+        for i in range(arr.rank()):
+            if i != axis:
+                new_shape.append(arr.shape[i])
+        if len(new_shape) == 0:
+            new_shape = [1]
+        return arr.reshape(new_shape)
+    new_shape = []
+    for i in range(arr.rank()):
+        if arr.shape[i] != 1:
+            new_shape.append(arr.shape[i])
+    if len(new_shape) == 0:
+        new_shape = [1]
+    return arr.reshape(new_shape)
+
+def at_least_1d(arr):
+    if arr.rank() >= 1:
+        return arr
+    return arr.reshape([1])
+
+def at_least_2d(arr):
+    if arr.rank() >= 2:
+        return arr
+    if arr.rank() == 1:
+        return arr.reshape([1, arr.shape[0]])
+    return arr.reshape([1, 1])
+
+def at_least_3d(arr):
+    if arr.rank() >= 3:
+        return arr
+    if arr.rank() == 2:
+        return arr.reshape([1, arr.shape[0], arr.shape[1]])
+    if arr.rank() == 1:
+        return arr.reshape([1, arr.shape[0], 1])
+    return arr.reshape([1, 1, 1])
+
+def unravel_index(flat_index, shape):
+    # Flat offset -> N-dimensional coordinates.
+    coords = []
+    for d in range(len(shape)):
+        coords.append(0)
+    rem = flat_index
+    for d in range(len(shape) - 1, -1, -1):
+        coords[d] = rem % shape[d]
+        rem = rem // shape[d]
+    return coords
+
+def ravel_multi_index(coords, shape):
+    # N-dimensional coordinates -> flat offset.
+    flat = 0
+    stride = 1
+    for d in range(len(shape) - 1, -1, -1):
+        flat = flat + coords[d] * stride
+        stride = stride * shape[d]
+    return flat
+
+# ---------------------------------------------------------------------------
+# NumPy-parity gap fill  (creation helpers, post TV-1001 audit)
+# ---------------------------------------------------------------------------
+
+def empty(shape, dtype="f64"):
+    # np.empty: uninitialized storage. TV-1001 note: buffers zero-initialize,
+    # so this returns a fresh zeroed buffer (the defined TV behavior) — callers
+    # must overwrite before reading, exactly as with np.empty semantics.
+    return NDArray(shape, dtype=dtype)
+
+def logspace(start, stop, num=50, base=10.0):
+    # np.logspace: base**linspace(start, stop, num).
+    lin = linspace(start, stop, num)
+    result = NDArray([num], dtype="f64")
+    for i in range(num):
+        e = lin.get_flat(i)
+        # base**e via exp/log for real exponents.
+        result.buffer.data[result.offset + i] = tv.exp(e * tv.log(base))
+    return result
+
+def geomspace(start, stop, num=50):
+    # np.geomspace: geometric progression from start to stop (same sign).
+    if start == 0.0 or stop == 0.0 or (start < 0.0) != (stop < 0.0):
+        raise ValueError("geomspace requires non-zero endpoints of the same sign")
+    log_start = tv.log(_abs_c(start))
+    log_stop = tv.log(_abs_c(stop))
+    result = NDArray([num], dtype="f64")
+    for i in range(num):
+        t = i / (num - 1) if num > 1 else 0.0
+        magnitude = tv.exp(log_start + t * (log_stop - log_start))
+        result.buffer.data[result.offset + i] = magnitude if start > 0.0 else -magnitude
+    return result
+
+def _abs_c(v):
+    if v < 0.0:
+        return -v
+    return v
+
+def ndim(arr):
+    # np.ndarray.ndim property as a module-level accessor.
+    return arr.rank()
+
+def size(arr):
+    # np.ndarray.size property as a module-level accessor.
+    return arr.total_length
+
+def ravel(arr):
+    # np.ravel: flattened 1-D copy (row-major).
+    contig = arr.contiguous()
+    return contig.reshape([arr.total_length])
+
+def copy(arr):
+    # np.copy: deep copy of the array.
+    return arr.clone()
+
+def astype(arr, dtype):
+    # np.astype: copy with a new dtype label. TV buffers are dtype-dynamic
+    # (values already stored as f64/i64), so the cast relabels the copy and
+    # keeps numeric values unchanged — matching the C# Convert path for the
+    # supported f32/f64/i32/i64/u8 set.
+    contig = arr.contiguous()
+    clone_buffer = contig.buffer.clone()
+    return NDArray(contig.shape, buffer=clone_buffer,
+                   strides=row_major_strides(contig.shape), offset=0, dtype=dtype)
+
+def ptp(arr, axis=None):
+    # np.ptp: peak-to-peak = max - min (global when axis is None).
+    if axis is None:
+        lo = arr.get_flat(0)
+        hi = arr.get_flat(0)
+        for i in range(1, arr.total_length):
+            v = arr.get_flat(i)
+            if v < lo:
+                lo = v
+            if v > hi:
+                hi = v
+        return hi - lo
+    norm_axis = axis
+    if norm_axis < 0:
+        norm_axis = norm_axis + arr.rank()
+    outer = 1
+    for d in range(norm_axis):
+        outer = outer * arr.shape[d]
+    inner = 1
+    for d in range(norm_axis + 1, arr.rank()):
+        inner = inner * arr.shape[d]
+    axis_dim = arr.shape[norm_axis]
+    result = NDArray(_reduced_shape_ptp(outer, inner))
+    for o in range(outer):
+        for inn in range(inner):
+            lo = arr.buffer.data[arr.offset + (o * axis_dim) * inner + inn]
+            hi = lo
+            for a in range(axis_dim):
+                v = arr.buffer.data[arr.offset + (o * axis_dim + a) * inner + inn]
+                if v < lo:
+                    lo = v
+                if v > hi:
+                    hi = v
+            result.buffer.data[result.offset + o * inner + inn] = hi - lo
+    return result
+
+def _reduced_shape_ptp(outer, inner):
+    # Shape for a single-axis reduction result.
+    if outer == 1 and inner == 1:
+        return [1]
+    return [outer, inner]
+
+def choose(indices_arr, choices):
+    # np.choose: result[i] = choices[indices_arr[i]][i] (same-shape choices).
+    n_choices = len(choices)
+    result = NDArray(indices_arr.shape, dtype=choices[0].dtype)
+    for i in range(indices_arr.total_length):
+        k = int(indices_arr.get_flat(i))
+        if k < 0 or k >= n_choices:
+            raise ValueError("choose index out of the choice list")
+        result.buffer.data[result.offset + i] = choices[k].get_flat(i)
+    return result
+
+def real(arr):
+    # np.real: real part. For a real tensor this is the tensor itself (copy);
+    # for an [N, 2] (re, im) complex layout it is the first column.
+    if arr.rank() == 2 and arr.shape[1] == 2:
+        n = arr.shape[0]
+        result = NDArray([n], dtype=arr.dtype)
+        for i in range(n):
+            result.buffer.data[result.offset + i] = arr.get([i, 0])
+        return result
+    return arr.clone()
+
+def imag(arr):
+    # np.imag: imaginary part. For a real tensor NumPy yields zeros; for an
+    # [N, 2] (re, im) complex layout it is the second column.
+    if arr.rank() == 2 and arr.shape[1] == 2:
+        n = arr.shape[0]
+        result = NDArray([n], dtype=arr.dtype)
+        for i in range(n):
+            result.buffer.data[result.offset + i] = arr.get([i, 1])
+        return result
+    return zeros(arr.shape, dtype=arr.dtype)

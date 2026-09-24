@@ -1,0 +1,525 @@
+# Copyright (c) TokenVector Project. All rights reserved.
+# Licensed under the MIT License.
+#
+# TV-1001: TokenVector (`.tkv`) translation of the **Spatial** module (part 1).
+# Source of truth (C# reference implementations, 1:1 sections):
+#   Spatial/SpatialTreesAndGeometry.cs -> KDTree (O(log N) k-NN), ConvexHull2D
+#       (Andrew's monotone chain), CDist (euclidean/manhattan/chebyshev/cosine),
+#       PointInPolygon (ray casting), PolygonArea (shoelace)
+#   Spatial/Quaternion.cs              -> Quaternion (axis-angle, euler,
+#       hamilton product, conjugate, normalize, inverse, slerp, 4x4 matrix)
+#   Spatial/Affine3D.cs                -> 4x4 translation/scaling/rotations,
+#       LookAt, PerspectiveFov, Orthographic, Cross, Dot
+
+import tv
+from tv.core import NDArray
+
+def _abs(v):
+    if v < 0.0:
+        return -v
+    return v
+
+# ---------------------------------------------------------------------------
+# KD-Tree  (Spatial/SpatialTreesAndGeometry.cs)
+# ---------------------------------------------------------------------------
+
+class _KDNode:
+    def __init__(self, point, index, axis):
+        self.point = point
+        self.index = index
+        self.axis = axis
+        self.left = None
+        self.right = None
+
+class KDTree:
+    # KD-tree for fast N-dimensional nearest-neighbor search.
+    def __init__(self, points):
+        n = points.shape[0]
+        self.dim = points.shape[1]
+        point_list = []
+        for i in range(n):
+            pt = []
+            for d in range(self.dim):
+                pt.append(points.get([i, d]))
+            point_list.append([pt, i])
+        self.root = self._build_tree(point_list, 0)
+
+    def _build_tree(self, pts, depth):
+        if len(pts) == 0:
+            return None
+        axis = depth % self.dim
+        pts = _sort_points_by_axis(pts, axis)
+        mid = len(pts) // 2
+        node = _KDNode(pts[mid][0], pts[mid][1], axis)
+        node.left = self._build_tree(pts[0:mid], depth + 1)
+        node.right = self._build_tree(pts[mid + 1:len(pts)], depth + 1)
+        return node
+
+    def query_nearest(self, query_point):
+        # Nearest point -> [distance, original index].
+        q = []
+        for d in range(self.dim):
+            q.append(query_point.buffer.data[query_point.offset + d])
+        best_dist_sq = 1.7976931348623157e308
+        best_idx = -1
+        best = _search_nearest(self.root, q, best_dist_sq, best_idx)
+        return [tv.sqrt(best[0]), best[1]]
+
+def _sort_points_by_axis(pts, axis):
+    # Insertion sort by coordinate on axis (stable).
+    arr = []
+    for p in pts:
+        arr.append(p)
+    for i in range(1, len(arr)):
+        key = arr[i]
+        j = i - 1
+        while j >= 0 and arr[j][0][axis] > key[0][axis]:
+            arr[j + 1] = arr[j]
+            j = j - 1
+        arr[j + 1] = key
+    return arr
+
+def _search_nearest(node, q, best_dist_sq, best_idx):
+    if node is None:
+        return [best_dist_sq, best_idx]
+    dist_sq = 0.0
+    for d in range(len(q)):
+        diff = q[d] - node.point[d]
+        dist_sq = dist_sq + diff * diff
+    if dist_sq < best_dist_sq:
+        best_dist_sq = dist_sq
+        best_idx = node.index
+    axis = node.axis
+    plane_diff = q[axis] - node.point[axis]
+    if plane_diff < 0:
+        first = node.left
+        second = node.right
+    else:
+        first = node.right
+        second = node.left
+    best = _search_nearest(first, q, best_dist_sq, best_idx)
+    if plane_diff * plane_diff < best[0]:
+        best = _search_nearest(second, q, best[0], best[1])
+    return best
+
+# ---------------------------------------------------------------------------
+# 2D Convex Hull (Andrew's Monotone Chain)
+# ---------------------------------------------------------------------------
+
+def _cross2(o, a, b):
+    return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+def convex_hull_2d(points):
+    # 2D convex hull in O(N log N), counter-clockwise order.
+    n = points.shape[0]
+    if n <= 3:
+        return points.clone()
+    pts = []
+    for i in range(n):
+        pts.append([points.get([i, 0]), points.get([i, 1])])
+    pts = _sort_points_xy(pts)
+    lower = []
+    for p_idx in range(len(pts)):
+        p = pts[p_idx]
+        while len(lower) >= 2 and _cross2(lower[len(lower) - 2], lower[len(lower) - 1], p) <= 0:
+            lower.pop()
+        lower.append(p)
+    upper = []
+    for p_idx in range(len(pts) - 1, -1, -1):
+        p = pts[p_idx]
+        while len(upper) >= 2 and _cross2(upper[len(upper) - 2], upper[len(upper) - 1], p) <= 0:
+            upper.pop()
+        upper.append(p)
+    lower.pop()
+    upper.pop()
+    hull_points = []
+    for i in range(len(lower)):
+        hull_points.append(lower[i])
+    for i in range(len(upper)):
+        hull_points.append(upper[i])
+    hull = NDArray([len(hull_points), 2])
+    for i in range(len(hull_points)):
+        hull.set([i, 0], hull_points[i][0])
+        hull.set([i, 1], hull_points[i][1])
+    return hull
+
+def _sort_points_xy(pts):
+    arr = []
+    for p in pts:
+        arr.append(p)
+    for i in range(1, len(arr)):
+        key = arr[i]
+        j = i - 1
+        while j >= 0:
+            if arr[j][0] > key[0] or (arr[j][0] == key[0] and arr[j][1] > key[1]):
+                arr[j + 1] = arr[j]
+                j = j - 1
+            else:
+                break
+        arr[j + 1] = key
+    return arr
+
+# ---------------------------------------------------------------------------
+# Pairwise Distance Matrices (CDist)
+# ---------------------------------------------------------------------------
+
+def cdist(xa, xb, metric="euclidean"):
+    # Pairwise distance matrix; metrics: euclidean, manhattan, chebyshev, cosine.
+    ma = xa.shape[0]
+    mb = xb.shape[0]
+    d = xa.shape[1]
+    dist = NDArray([ma, mb])
+    for i in range(ma):
+        for j in range(mb):
+            if metric == "manhattan":
+                sum_v = 0.0
+                for k in range(d):
+                    sum_v = sum_v + _abs(xa.get([i, k]) - xb.get([j, k]))
+                dist.set([i, j], sum_v)
+            elif metric == "chebyshev":
+                max_d = 0.0
+                for k in range(d):
+                    diff = _abs(xa.get([i, k]) - xb.get([j, k]))
+                    if diff > max_d:
+                        max_d = diff
+                dist.set([i, j], max_d)
+            elif metric == "cosine":
+                dot = 0.0
+                n_a = 0.0
+                n_b = 0.0
+                for k in range(d):
+                    dot = dot + xa.get([i, k]) * xb.get([j, k])
+                    n_a = n_a + xa.get([i, k]) * xa.get([i, k])
+                    n_b = n_b + xb.get([j, k]) * xb.get([j, k])
+                denom = tv.sqrt(n_a * n_b)
+                if denom > 1e-15:
+                    dist.set([i, j], 1.0 - (dot / denom))
+                else:
+                    dist.set([i, j], 0.0)
+            else:
+                sum_sq = 0.0
+                for k in range(d):
+                    diff = xa.get([i, k]) - xb.get([j, k])
+                    sum_sq = sum_sq + diff * diff
+                dist.set([i, j], tv.sqrt(sum_sq))
+    return dist
+
+# ---------------------------------------------------------------------------
+# Polygon Geometry
+# ---------------------------------------------------------------------------
+
+def point_in_polygon(polygon, x, y):
+    # Ray-casting point-in-polygon test.
+    n = polygon.shape[0]
+    inside = False
+    j = n - 1
+    for i in range(n):
+        xi = polygon.get([i, 0])
+        yi = polygon.get([i, 1])
+        xj = polygon.get([j, 0])
+        yj = polygon.get([j, 1])
+        intersect = ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / (yj - yi) + xi)
+        if intersect:
+            inside = not inside
+        j = i
+    return inside
+
+def polygon_area(polygon):
+    # Shoelace formula polygon area.
+    n = polygon.shape[0]
+    area = 0.0
+    for i in range(n):
+        j = (i + 1) % n
+        area = area + polygon.get([i, 0]) * polygon.get([j, 1])
+        area = area - polygon.get([j, 0]) * polygon.get([i, 1])
+    if area < 0.0:
+        area = -area
+    return area * 0.5
+
+# ---------------------------------------------------------------------------
+# Quaternion  (Spatial/Quaternion.cs)
+# ---------------------------------------------------------------------------
+
+class Quaternion:
+    # 4D quaternion for smooth 3D rotations and slerp.
+    def __init__(self, x, y, z, w):
+        self.x = x
+        self.y = y
+        self.z = z
+        self.w = w
+
+def quaternion_identity():
+    return Quaternion(0.0, 0.0, 0.0, 1.0)
+
+def quaternion_from_axis_angle(ax, ay, az, radians):
+    half_angle = radians / 2.0
+    sin_v = tv.sin(half_angle)
+    cos_v = tv.cos(half_angle)
+    norm = tv.sqrt(ax * ax + ay * ay + az * az)
+    if norm > 0.0:
+        ax = ax / norm
+        ay = ay / norm
+        az = az / norm
+    return Quaternion(ax * sin_v, ay * sin_v, az * sin_v, cos_v)
+
+def quaternion_from_euler(pitch, yaw, roll):
+    # Yaw: Y, Pitch: X, Roll: Z (radians).
+    half_pitch = pitch / 2.0
+    half_yaw = yaw / 2.0
+    half_roll = roll / 2.0
+    c_x = tv.cos(half_pitch)
+    s_x = tv.sin(half_pitch)
+    c_y = tv.cos(half_yaw)
+    s_y = tv.sin(half_yaw)
+    c_z = tv.cos(half_roll)
+    s_z = tv.sin(half_roll)
+    return Quaternion(
+        s_x * c_y * c_z + c_x * s_y * s_z,
+        c_x * s_y * c_z - s_x * c_y * s_z,
+        c_x * c_y * s_z - s_x * s_y * c_z,
+        c_x * c_y * c_z + s_x * s_y * s_z
+    )
+
+def quaternion_mul(a, b):
+    # Hamilton product.
+    return Quaternion(
+        a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+        a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+        a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+        a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z
+    )
+
+def quaternion_neg(q):
+    return Quaternion(-q.x, -q.y, -q.z, -q.w)
+
+def quaternion_conjugate(q):
+    return Quaternion(-q.x, -q.y, -q.z, q.w)
+
+def quaternion_length_squared(q):
+    return q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w
+
+def quaternion_length(q):
+    return tv.sqrt(quaternion_length_squared(q))
+
+def quaternion_normalize(q):
+    length = quaternion_length(q)
+    if length < 1e-15:
+        return quaternion_identity()
+    return Quaternion(q.x / length, q.y / length, q.z / length, q.w / length)
+
+def quaternion_inverse(q):
+    len_sq = quaternion_length_squared(q)
+    if len_sq < 1e-15:
+        return quaternion_identity()
+    return Quaternion(-q.x / len_sq, -q.y / len_sq, -q.z / len_sq, q.w / len_sq)
+
+def quaternion_dot(a, b):
+    return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w
+
+def quaternion_slerp(q1, q2, t):
+    # Spherical linear interpolation along the 4D hypersphere.
+    cos_theta = quaternion_dot(q1, q2)
+    if cos_theta < 0.0:
+        q2 = quaternion_neg(q2)
+        cos_theta = -cos_theta
+    if cos_theta > 0.9995:
+        x = q1.x + t * (q2.x - q1.x)
+        y = q1.y + t * (q2.y - q1.y)
+        z = q1.z + t * (q2.z - q1.z)
+        w = q1.w + t * (q2.w - q1.w)
+        return quaternion_normalize(Quaternion(x, y, z, w))
+    if cos_theta > 1.0:
+        cos_theta = 1.0
+    if cos_theta < -1.0:
+        cos_theta = -1.0
+    theta = tv.acos(cos_theta)
+    sin_theta = tv.sin(theta)
+    scale1 = tv.sin((1.0 - t) * theta) / sin_theta
+    scale2 = tv.sin(t * theta) / sin_theta
+    return quaternion_normalize(Quaternion(
+        scale1 * q1.x + scale2 * q2.x,
+        scale1 * q1.y + scale2 * q2.y,
+        scale1 * q1.z + scale2 * q2.z,
+        scale1 * q1.w + scale2 * q2.w
+    ))
+
+def quaternion_to_rotation_matrix_4x4(q):
+    # Quaternion -> 4x4 rotation matrix.
+    nq = quaternion_normalize(q)
+    xx = nq.x * nq.x
+    yy = nq.y * nq.y
+    zz = nq.z * nq.z
+    xy = nq.x * nq.y
+    xz = nq.x * nq.z
+    yz = nq.y * nq.z
+    wx = nq.w * nq.x
+    wy = nq.w * nq.y
+    wz = nq.w * nq.z
+    two = 2.0
+    m = NDArray([4, 4])
+    for i in range(4):
+        m.set([i, i], 1.0)
+    m.set([0, 0], 1.0 - two * (yy + zz))
+    m.set([0, 1], two * (xy - wz))
+    m.set([0, 2], two * (xz + wy))
+    m.set([1, 0], two * (xy + wz))
+    m.set([1, 1], 1.0 - two * (xx + zz))
+    m.set([1, 2], two * (yz - wx))
+    m.set([2, 0], two * (xz - wy))
+    m.set([2, 1], two * (yz + wx))
+    m.set([2, 2], 1.0 - two * (xx + yy))
+    return m
+
+# ---------------------------------------------------------------------------
+# Affine3D  (Spatial/Affine3D.cs)
+# ---------------------------------------------------------------------------
+
+def _eye4():
+    m = NDArray([4, 4])
+    for i in range(4):
+        m.set([i, i], 1.0)
+    return m
+
+def translation(tx, ty, tz):
+    m = _eye4()
+    m.set([0, 3], tx)
+    m.set([1, 3], ty)
+    m.set([2, 3], tz)
+    return m
+
+def scaling(sx, sy, sz):
+    m = _eye4()
+    m.set([0, 0], sx)
+    m.set([1, 1], sy)
+    m.set([2, 2], sz)
+    return m
+
+def rotation_x(radians):
+    m = _eye4()
+    cos_v = tv.cos(radians)
+    sin_v = tv.sin(radians)
+    m.set([1, 1], cos_v)
+    m.set([1, 2], -sin_v)
+    m.set([2, 1], sin_v)
+    m.set([2, 2], cos_v)
+    return m
+
+def rotation_y(radians):
+    m = _eye4()
+    cos_v = tv.cos(radians)
+    sin_v = tv.sin(radians)
+    m.set([0, 0], cos_v)
+    m.set([0, 2], sin_v)
+    m.set([2, 0], -sin_v)
+    m.set([2, 2], cos_v)
+    return m
+
+def rotation_z(radians):
+    m = _eye4()
+    cos_v = tv.cos(radians)
+    sin_v = tv.sin(radians)
+    m.set([0, 0], cos_v)
+    m.set([0, 1], -sin_v)
+    m.set([1, 0], sin_v)
+    m.set([1, 1], cos_v)
+    return m
+
+def rotation_axis_angle(ax, ay, az, radians):
+    # 4x4 rotation around an arbitrary (normalized) axis.
+    norm = tv.sqrt(ax * ax + ay * ay + az * az)
+    if norm > 0.0:
+        ax = ax / norm
+        ay = ay / norm
+        az = az / norm
+    c = tv.cos(radians)
+    s = tv.sin(radians)
+    t = 1.0 - c
+    m = _eye4()
+    m.set([0, 0], t * ax * ax + c)
+    m.set([0, 1], t * ax * ay - s * az)
+    m.set([0, 2], t * ax * az + s * ay)
+    m.set([1, 0], t * ax * ay + s * az)
+    m.set([1, 1], t * ay * ay + c)
+    m.set([1, 2], t * ay * az - s * ax)
+    m.set([2, 0], t * ax * az - s * ay)
+    m.set([2, 1], t * ay * az + s * ax)
+    m.set([2, 2], t * az * az + c)
+    return m
+
+def look_at(eye, target, up):
+    # View matrix (LookAt camera). eye/target/up are [x, y, z] lists.
+    f_x = eye[0] - target[0]
+    f_y = eye[1] - target[1]
+    f_z = eye[2] - target[2]
+    f_norm = tv.sqrt(f_x * f_x + f_y * f_y + f_z * f_z)
+    if f_norm > 0.0:
+        f_x = f_x / f_norm
+        f_y = f_y / f_norm
+        f_z = f_z / f_norm
+    r_x = up[1] * f_z - up[2] * f_y
+    r_y = up[2] * f_x - up[0] * f_z
+    r_z = up[0] * f_y - up[1] * f_x
+    r_norm = tv.sqrt(r_x * r_x + r_y * r_y + r_z * r_z)
+    if r_norm > 0.0:
+        r_x = r_x / r_norm
+        r_y = r_y / r_norm
+        r_z = r_z / r_norm
+    u_x = f_y * r_z - f_z * r_y
+    u_y = f_z * r_x - f_x * r_z
+    u_z = f_x * r_y - f_y * r_x
+    m = _eye4()
+    m.set([0, 0], r_x)
+    m.set([0, 1], r_y)
+    m.set([0, 2], r_z)
+    m.set([0, 3], -(r_x * eye[0] + r_y * eye[1] + r_z * eye[2]))
+    m.set([1, 0], u_x)
+    m.set([1, 1], u_y)
+    m.set([1, 2], u_z)
+    m.set([1, 3], -(u_x * eye[0] + u_y * eye[1] + u_z * eye[2]))
+    m.set([2, 0], f_x)
+    m.set([2, 1], f_y)
+    m.set([2, 2], f_z)
+    m.set([2, 3], -(f_x * eye[0] + f_y * eye[1] + f_z * eye[2]))
+    return m
+
+def perspective_fov(fov_y_radians, aspect_ratio, near_z, far_z):
+    # Perspective projection matrix.
+    half_fov = fov_y_radians / 2.0
+    tan_half_fov = tv.tan(half_fov)
+    y_scale = 1.0 / tan_half_fov
+    x_scale = y_scale / aspect_ratio
+    m = NDArray([4, 4])
+    m.set([0, 0], x_scale)
+    m.set([1, 1], y_scale)
+    m.set([2, 2], (far_z + near_z) / (near_z - far_z))
+    m.set([2, 3], (2.0 * far_z * near_z) / (near_z - far_z))
+    m.set([3, 2], -1.0)
+    return m
+
+def orthographic(width, height, near_z, far_z):
+    # Orthographic projection matrix.
+    m = _eye4()
+    m.set([0, 0], 2.0 / width)
+    m.set([1, 1], 2.0 / height)
+    m.set([2, 2], -2.0 / (far_z - near_z))
+    m.set([2, 3], -(far_z + near_z) / (far_z - near_z))
+    return m
+
+def cross(a, b):
+    # 3D cross product of two 3-element vectors.
+    if a.total_length != 3 or b.total_length != 3:
+        raise ValueError("Cross product requires 3-element vectors")
+    result = NDArray([3])
+    result.buffer.data[result.offset] = a.buffer.data[a.offset + 1] * b.buffer.data[b.offset + 2] - a.buffer.data[a.offset + 2] * b.buffer.data[b.offset + 1]
+    result.buffer.data[result.offset + 1] = a.buffer.data[a.offset + 2] * b.buffer.data[b.offset] - a.buffer.data[a.offset] * b.buffer.data[b.offset + 2]
+    result.buffer.data[result.offset + 2] = a.buffer.data[a.offset] * b.buffer.data[b.offset + 1] - a.buffer.data[a.offset + 1] * b.buffer.data[b.offset]
+    return result
+
+def dot(a, b):
+    # Dot product of two 1D vectors.
+    if a.total_length != b.total_length:
+        raise ValueError("Vectors must have equal length for Dot product")
+    sum_v = 0.0
+    for i in range(a.total_length):
+        sum_v = sum_v + a.buffer.data[a.offset + i] * b.buffer.data[b.offset + i]
+    return sum_v

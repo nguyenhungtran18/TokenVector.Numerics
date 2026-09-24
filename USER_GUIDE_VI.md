@@ -4,7 +4,7 @@
 [ 🇬🇧 English ](USER_GUIDE.md) | [ 🇻🇳 Tiếng Việt ](USER_GUIDE_VI.md)
 
 **Tài liệu mã số:** TKV-NUMERICS-GUIDE-2026-V6 (GRAND UNIFIED EDITION)  
-**Nền tảng mục tiêu:** C# 12 / .NET 8 LTS / TokenVector Compiler AOT  
+**Nền tảng mục tiêu:** .NET 8 LTS / TokenVector Compiler AOT  
 **Bản quyền:** TokenVector Compiler Team & Antigravity AI Team  
 
 ---
@@ -24,6 +24,7 @@
 12. [Chương 12: Toán Đa Thức, Tích Lũy, Sai Phân, Lưới & Tập Hợp](#chương-12-toán-đa-thức-tích-lũy-sai-phân-lưới--tập-hợp)
 13. [Chương 13: Hạt nhân AI, Deep Learning & Transformer (Neural)](#chương-13-hạt-nhân-ai-deep-learning--transformer-neural)
 14. [Chương 14: Tự Động Vi Phân & Huấn Luyện Mạng Nơ-ron (Autograd Engine)](#chương-14-tự-động-vi-phân--huấn-luyện-mạng-nơ-ron-autograd-engine)
+15. [Chương 15: Thư Viện Chuẩn TokenVector (.tkv) — Parity 100% Surface Số Học](#chương-15-thư-viện-chuẩn-tokenvector-tkv--parity-100-surface-số-học)
 
 ---
 
@@ -52,7 +53,7 @@ var permuted = a.Permute(1, 0); // Transpose 2D
 
 ## CHƯƠNG 2: BROADCASTING ENGINE & TỐI ƯU HÓA SIMD
 
-`TokenVector.Numerics` tích hợp thuật toán Broadcasting right-aligned chuẩn NumPy kết hợp kỹ thuật **Stride-0** và phần cứng **AVX2/FMA**.
+`TokenVector.Numerics` tích hợp thuật toán Broadcasting right-aligned chuẩn kết hợp kỹ thuật **Stride-0** và phần cứng **AVX2/FMA**.
 
 ```csharp
 using TokenVector.Numerics.Core;
@@ -350,3 +351,77 @@ for (int epoch = 0; epoch < 200; epoch++)
     optimizer.Step();
 }
 ```
+
+---
+
+## CHƯƠNG 15: THƯ VIỆN CHUẨN TOKENVECTOR (.TKV) — PARITY 100% SURFACE SỐ HỌC
+
+*Mới trong v1.1.0.* Toàn bộ thư viện nay được phát hành cả bằng **ngôn ngữ TokenVector**: 27 module `.tkv` (~12.1k dòng) trong `src/tokenvector/`, xây theo grammar `TKV-SPEC-SYNTAX-2026-V1` (TV-1001). Mỗi module mang header "Source of truth" ánh xạ từng section nguồn sang hàm `.tkv` tương ứng.
+
+### 15.1 Bản đồ module
+
+| Nhóm | Module |
+| :--- | :--- |
+| Lõi tensor engine | `core` (NDArray, TensorBuffer, BoolNDArray, shape/broadcast helpers), `engine` (broadcast Stride-0, kernel SIMD), `io` (.npy/.npz/raw/CSV, MemoryMappedNDArray) |
+| Bề mặt toán | `ops`, `manipulation`, `grid`, `compare`, `linalg`, `linalg_functions`, `poly`, `special`, `fft`, `signal`, `random`, `statistics`, `optimize`, `interpolation` |
+| AI | `autograd` (Tensor, reverse-mode AD, SGD/AdamW, Module/Linear/Sequential/RMSNorm), `neural` (activations, attention, conv2d, Sinkhorn, DDIM) |
+| Domain | `quantum`, `physics`, `astro`, `finance`, `spatial`, `geometry3d`, `crypto_graph`, `biology_robotics` |
+
+### 15.2 Độ phủ surface số học — 100%
+
+Công cụ audit đối chiếu toàn bộ surface public của thư viện số học tham chiếu (595 tên được audit) với từng hàm trong stdlib `.tkv` (hàm module + method verify trên class `NDArray`/`BoolNDArray`/`Tensor` thật):
+
+| Nhóm | Số tên |
+| :--- | ---: |
+| N/A tầng ngôn ngữ (dtype objects, hằng số, máy RNG, packaging) | 241 |
+| **Library surface được audit** | **354** |
+| **Khớp trong stdlib .tkv** | **354 (100%)** |
+| Còn thiếu | **0** |
+
+241 tên tầng ngôn ngữ do chính ngôn ngữ/compiler TokenVector đảm nhận (`tv.f64`, hằng số runtime, `tkvc`) theo thiết kế — không phải nhiệm vụ của thư viện.
+
+### 15.3 Bộ công cụ kiểm chứng
+
+```powershell
+# 1. Smoke suite: 175 check trên cả 27 module
+python tests/tokenvector/tkv_harness.py
+#    Syntax gate: all .tkv modules parse, TV-1001 constructs only.
+#    TokenVector stdlib smoke tests: passed=175, failed=0
+
+# 2. Audit độ phủ (tái lập được, in chi tiết từng nhóm)
+python tests/tokenvector/numpy_coverage_audit.py
+
+# 3. Parity số học + benchmark hiệu năng
+python tests/tokenvector/benchmark_vs_numpy.py
+#    matmul / broadcast add: max|diff| = 0.0, SVD: 1.1e-14, FFT: ~5e-12
+
+# Hoặc compile native bằng tkvc (repo compiler):
+./tkvc.exe tests/tokenvector/smoke_tests.tkv -r src/tokenvector -o smoke.exe
+```
+
+### 15.4 Bắt đầu nhanh với TokenVector
+
+```tokenvector
+import tv
+from tv.core import from_array
+from tv import linalg
+import tv.autograd as ag
+
+# Toán với parity đã kiểm chứng (xem benchmark)
+A = from_array([4.0, 1.0, 1.0, 3.0], [2, 2])
+U, S, Vt = linalg.svd(A)
+
+# Fancy indexing (semantics chuẩn)
+mask = tv.compare.greater_than(A, tv.core.full(2.0, [2, 2]))
+picked = tv.grid.boolean_select(A, mask)      # arr[mask]
+tv.grid.boolean_assign(A, mask, 0.0)          # arr[mask] = 0.0
+
+# Autograd có sẵn trong stdlib
+x = ag.Tensor.full(3.0, [1])
+x.requires_grad = True
+y = x * x
+y.backward()                                  # dy/dx = 2x = 6.0
+print(x.grad.get([0]))
+```
+
+**Bối cảnh parity & hiệu năng:** kết quả số khớp thư viện tham chiếu trên mọi kernel benchmark (max|diff| 0.0 → 1.1e-14). Thời gian chạy mức thông dịch chậm hơn 400–2800×; `tkvc -O parallel -O simd` hạ chính các vòng lặp đó xuống SIMD/parallel native. Bảng đầy đủ xem `src/tokenvector/README.md` §5–§6.

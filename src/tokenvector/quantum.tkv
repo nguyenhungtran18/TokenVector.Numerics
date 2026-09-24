@@ -1,0 +1,282 @@
+# Copyright (c) TokenVector Project. All rights reserved.
+# Licensed under the MIT License.
+#
+# TV-1001: TokenVector (`.tkv`) translation of Quantum/QuantumEngine.cs.
+# Source of truth (C# reference implementation, 1:1 sections):
+#   QState statevector simulator: H, X, Y, Z, S, T, Rz, CNOT, Toffoli,
+#   CZ, SWAP, CRz, full-circuit QFT, Born-rule Measure, ProbabilityOne,
+#   DensityMatrix, VonNeumannEntropy (via eigh).
+#
+# Fidelity notes:
+#   - Gate application keeps the bit-twiddling index decomposition
+#     (low/high split around the target bit) of the C# implementation.
+#   - Measurement collapse uses Born's rule with normalization of surviving
+#     amplitudes and zeroing of the rest.
+
+import tv
+from tv.core import NDArray
+from tv.linalg_functions import Complex
+from tv.linalg import eigh
+
+_INV_SQRT2 = 0.70710678118654752440084436210484904
+_PI = 3.14159265358979323846
+
+def _c(re, im):
+    return Complex(re, im)
+
+def _czero():
+    return Complex(0.0, 0.0)
+
+def _cone():
+    return Complex(1.0, 0.0)
+
+def _c_add(a, b):
+    return Complex(a.real + b.real, a.imaginary + b.imaginary)
+
+def _c_mul(a, b):
+    return Complex(a.real * b.real - a.imaginary * b.imaginary,
+                   a.real * b.imaginary + a.imaginary * b.real)
+
+def _c_scale(a, s):
+    return Complex(a.real * s, a.imaginary * s)
+
+def _c_mag_sq(a):
+    return a.real * a.real + a.imaginary * a.imaginary
+
+class QState:
+    # N-Qubit statevector simulator (up to 28 qubits in the C# engine).
+    def __init__(self, num_qubits):
+        if num_qubits < 1 or num_qubits > 28:
+            raise ValueError("Number of qubits must be between 1 and 28")
+        self.num_qubits = num_qubits
+        self.dim = 1 << num_qubits
+        self.state = []
+        for i in range(self.dim):
+            self.state.append(_czero())
+        self.state[0] = _cone()  # |00...0>
+
+    def _check_qubit(self, q):
+        if q < 0 or q >= self.num_qubits:
+            raise ValueError("Qubit index out of range")
+
+    # -- Single-qubit gates ----------------------------------------------------
+
+    def _apply_1qubit_gate(self, target_qubit, u00, u01, u10, u11):
+        self._check_qubit(target_qubit)
+        bit = 1 << target_qubit
+        half_dim = self.dim >> 1
+        for idx in range(half_dim):
+            low = idx & (bit - 1)
+            high = (idx >> target_qubit) << (target_qubit + 1)
+            i0 = high | low
+            i1 = i0 | bit
+            a0 = self.state[i0]
+            a1 = self.state[i1]
+            self.state[i0] = _c_add(_c_mul(u00, a0), _c_mul(u01, a1))
+            self.state[i1] = _c_add(_c_mul(u10, a0), _c_mul(u11, a1))
+        return self
+
+    def h(self, target_qubit):
+        # Hadamard gate.
+        return self._apply_1qubit_gate(target_qubit,
+                                       _c(_INV_SQRT2, 0.0), _c(_INV_SQRT2, 0.0),
+                                       _c(_INV_SQRT2, 0.0), _c(-_INV_SQRT2, 0.0))
+
+    def x(self, target_qubit):
+        # Pauli-X (NOT).
+        return self._apply_1qubit_gate(target_qubit,
+                                       _czero(), _cone(), _cone(), _czero())
+
+    def y(self, target_qubit):
+        # Pauli-Y.
+        return self._apply_1qubit_gate(target_qubit,
+                                       _czero(), _c(0.0, -1.0),
+                                       _c(0.0, 1.0), _czero())
+
+    def z(self, target_qubit):
+        # Pauli-Z (phase flip).
+        return self._apply_1qubit_gate(target_qubit,
+                                       _cone(), _czero(), _czero(), _c(-1.0, 0.0))
+
+    def s(self, target_qubit):
+        # Phase gate S.
+        return self._apply_1qubit_gate(target_qubit,
+                                       _cone(), _czero(), _czero(), _c(0.0, 1.0))
+
+    def t(self, target_qubit):
+        # T (pi/8) gate.
+        return self._apply_1qubit_gate(target_qubit,
+                                       _cone(), _czero(), _czero(), _c(_INV_SQRT2, _INV_SQRT2))
+
+    def rz(self, target_qubit, theta):
+        # Rotation about Z axis.
+        half_theta = theta * 0.5
+        u00 = _c(tv.cos(-half_theta), tv.sin(-half_theta))
+        u11 = _c(tv.cos(half_theta), tv.sin(half_theta))
+        return self._apply_1qubit_gate(target_qubit, u00, _czero(), _czero(), u11)
+
+    # -- Multi-qubit gates -------------------------------------------------------
+
+    def cnot(self, control_qubit, target_qubit):
+        # Controlled-NOT.
+        self._check_qubit(control_qubit)
+        self._check_qubit(target_qubit)
+        if control_qubit == target_qubit:
+            raise ValueError("Control and target qubits must be distinct")
+        c_mask = 1 << control_qubit
+        t_mask = 1 << target_qubit
+        for i in range(self.dim):
+            if (i & c_mask) != 0 and (i & t_mask) == 0:
+                paired = i | t_mask
+                tmp = self.state[i]
+                self.state[i] = self.state[paired]
+                self.state[paired] = tmp
+        return self
+
+    def toffoli(self, control1, control2, target_qubit):
+        # Toffoli (CCNOT).
+        self._check_qubit(control1)
+        self._check_qubit(control2)
+        self._check_qubit(target_qubit)
+        c1_mask = 1 << control1
+        c2_mask = 1 << control2
+        t_mask = 1 << target_qubit
+        for i in range(self.dim):
+            if (i & c1_mask) != 0 and (i & c2_mask) != 0 and (i & t_mask) == 0:
+                paired = i | t_mask
+                tmp = self.state[i]
+                self.state[i] = self.state[paired]
+                self.state[paired] = tmp
+        return self
+
+    def cz(self, control_qubit, target_qubit):
+        # Controlled-Z.
+        self._check_qubit(control_qubit)
+        self._check_qubit(target_qubit)
+        c_mask = 1 << control_qubit
+        t_mask = 1 << target_qubit
+        for i in range(self.dim):
+            if (i & c_mask) != 0 and (i & t_mask) != 0:
+                self.state[i] = _c_scale(self.state[i], -1.0)
+        return self
+
+    def swap(self, qubit1, qubit2):
+        # SWAP gate.
+        self._check_qubit(qubit1)
+        self._check_qubit(qubit2)
+        if qubit1 == qubit2:
+            return self
+        m1 = 1 << qubit1
+        m2 = 1 << qubit2
+        for i in range(self.dim):
+            b1 = (i & m1) != 0
+            b2 = (i & m2) != 0
+            if b1 and not b2:
+                paired = (i & ~m1) | m2
+                tmp = self.state[i]
+                self.state[i] = self.state[paired]
+                self.state[paired] = tmp
+        return self
+
+    def crz(self, control_qubit, target_qubit, theta):
+        # Controlled-Rz.
+        self._check_qubit(control_qubit)
+        self._check_qubit(target_qubit)
+        c_mask = 1 << control_qubit
+        t_mask = 1 << target_qubit
+        exp_pos = _c(tv.cos(theta * 0.5), -tv.sin(theta * 0.5))
+        exp_neg = _c(tv.cos(theta * 0.5), tv.sin(theta * 0.5))
+        for i in range(self.dim):
+            if (i & c_mask) != 0:
+                if (i & t_mask) == 0:
+                    self.state[i] = _c_mul(self.state[i], exp_pos)
+                else:
+                    self.state[i] = _c_mul(self.state[i], exp_neg)
+        return self
+
+    def qft(self):
+        # Full Quantum Fourier Transform circuit on all N qubits.
+        for i in range(self.num_qubits):
+            self.h(i)
+            for j in range(i + 1, self.num_qubits):
+                theta = _PI / (1 << (j - i))
+                self.crz(j, i, theta)
+        for i in range(self.num_qubits // 2):
+            self.swap(i, self.num_qubits - 1 - i)
+        return self
+
+    # -- Measurement & probabilities ----------------------------------------------
+
+    def probability_one(self, target_qubit):
+        # Probability of measuring target qubit in |1>.
+        self._check_qubit(target_qubit)
+        bit = 1 << target_qubit
+        prob = 0.0
+        for i in range(self.dim):
+            if (i & bit) != 0:
+                prob = prob + _c_mag_sq(self.state[i])
+        return prob
+
+    def get_probabilities(self):
+        # Probability distribution across all 2^N basis states.
+        probs = []
+        for i in range(self.dim):
+            probs.append(_c_mag_sq(self.state[i]))
+        return probs
+
+    def density_matrix(self):
+        # Pure-state density matrix rho = |psi><psi| (real part).
+        rho = NDArray([self.dim, self.dim])
+        for i in range(self.dim):
+            for j in range(self.dim):
+                rho.set([i, j], self.state[i].real * self.state[j].real + self.state[i].imaginary * self.state[j].imaginary)
+        return rho
+
+    def von_neumann_entropy(self):
+        # Von Neumann entropy of the current state.
+        return von_neumann_entropy(self.density_matrix())
+
+    def measure(self, target_qubit, rng=None):
+        # Born-rule measurement with statevector collapse -> 0 or 1.
+        self._check_qubit(target_qubit)
+        if rng is None:
+            rng = _DefaultRng()
+        p1 = self.probability_one(target_qubit)
+        if rng.next_double() < p1:
+            outcome = 1
+        else:
+            outcome = 0
+        if outcome == 1:
+            norm_factor = 1.0 / tv.sqrt(p1)
+        else:
+            norm_factor = 1.0 / tv.sqrt(1.0 - p1)
+        bit = 1 << target_qubit
+        for i in range(self.dim):
+            if (i & bit) != 0:
+                bit_val = 1
+            else:
+                bit_val = 0
+            if bit_val == outcome:
+                self.state[i] = _c_scale(self.state[i], norm_factor)
+            else:
+                self.state[i] = _czero()
+        return outcome
+
+class _DefaultRng:
+    # Fallback RNG for measurement (Park-Miller LCG).
+    def __init__(self):
+        self.state = 987654321
+
+    def next_double(self):
+        self.state = (self.state * 16807) % 2147483647
+        return (self.state - 1) / 2147483646.0
+
+def von_neumann_entropy(density_matrix):
+    # S(rho) = -Tr(rho ln rho) computed from eigh eigenvalues.
+    eigvals, _eigvecs = eigh(density_matrix)
+    entropy = 0.0
+    for i in range(eigvals.total_length):
+        p = eigvals.buffer.data[eigvals.offset + i]
+        if p > 1e-12:
+            entropy = entropy - p * tv.log(p)
+    return entropy

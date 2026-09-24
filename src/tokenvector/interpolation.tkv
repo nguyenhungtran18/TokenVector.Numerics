@@ -1,0 +1,222 @@
+# Copyright (c) TokenVector Project. All rights reserved.
+# Licensed under the MIT License.
+#
+# TV-1001: TokenVector (`.tkv`) translation of Interpolation/InterpolationAndSplines.cs.
+# Source of truth (C# reference implementation, 1:1 sections):
+#   CubicSpline + CubicSplineModel (natural spline, tridiagonal solve)
+#   BilinearInterpolation (2D grid)
+#   FitRBF + RbfInterpolator (multiquadric, gaussian, inverse_multiquadric, thin_plate)
+#   BarycentricInterpolation (high-order stable polynomial interpolation)
+
+import tv
+from tv.core import NDArray
+from tv.linalg import solve as _linalg_solve
+
+def _flat_get(arr, i):
+    return arr.get_flat(i)
+
+# ---------------------------------------------------------------------------
+# 1D Cubic Spline Interpolation
+# ---------------------------------------------------------------------------
+
+class CubicSplineModel:
+    # Natural or clamped 1D cubic spline with binary-search evaluation.
+    def __init__(self, x_arr, a_arr, b_arr, c_arr, d_arr):
+        self.x = x_arr
+        self.a = a_arr
+        self.b = b_arr
+        self.c = c_arr
+        self.d = d_arr
+        self.n = len(x_arr) - 1
+
+    def evaluate_value(self, x_val):
+        if x_val <= self.x[0]:
+            return self.a[0] + self.b[0] * (x_val - self.x[0])
+        if x_val >= self.x[self.n]:
+            return self.a[self.n] + self.b[self.n] * (x_val - self.x[self.n])
+        # Binary search for interval
+        low = 0
+        high = self.n
+        while low < high - 1:
+            mid = (low + high) // 2
+            if self.x[mid] <= x_val:
+                low = mid
+            else:
+                high = mid
+        dx = x_val - self.x[low]
+        return self.a[low] + self.b[low] * dx + self.c[low] * dx * dx + self.d[low] * dx * dx * dx
+
+    def evaluate(self, x_vals):
+        res = NDArray(x_vals.shape)
+        for i in range(x_vals.total_length):
+            res.buffer.data[res.offset + i] = self.evaluate_value(x_vals.buffer.data[x_vals.offset + i])
+        return res
+
+def cubic_spline(x, y):
+    # Natural cubic spline through knots (x, y) -> CubicSplineModel.
+    n = x.total_length - 1
+    if n < 2:
+        raise ValueError("At least 3 points required for cubic spline")
+    h = []
+    a = []
+    for i in range(n + 1):
+        a.append(_flat_get(y, i))
+    for i in range(n):
+        h.append(_flat_get(x, i + 1) - _flat_get(x, i))
+    alpha = []
+    for i in range(n):
+        alpha.append(0.0)
+    for i in range(1, n):
+        alpha[i] = (3.0 / h[i]) * (a[i + 1] - a[i]) - (3.0 / h[i - 1]) * (a[i] - a[i - 1])
+    # Tridiagonal solve for c
+    l_arr = []
+    mu = []
+    z = []
+    for i in range(n + 1):
+        l_arr.append(0.0)
+        mu.append(0.0)
+        z.append(0.0)
+    l_arr[0] = 1.0
+    for i in range(1, n):
+        l_arr[i] = 2.0 * (_flat_get(x, i + 1) - _flat_get(x, i - 1)) - h[i - 1] * mu[i - 1]
+        mu[i] = h[i] / l_arr[i]
+        z[i] = (alpha[i] - h[i - 1] * z[i - 1]) / l_arr[i]
+    l_arr[n] = 1.0
+    z[n] = 0.0
+    c_arr = []
+    b_arr = []
+    d_arr = []
+    for i in range(n + 1):
+        c_arr.append(0.0)
+        b_arr.append(0.0)
+        d_arr.append(0.0)
+    c_arr[n] = 0.0
+    for j in range(n - 1, -1, -1):
+        c_arr[j] = z[j] - mu[j] * c_arr[j + 1]
+        b_arr[j] = (a[j + 1] - a[j]) / h[j] - h[j] * (c_arr[j + 1] + 2.0 * c_arr[j]) / 3.0
+        d_arr[j] = (c_arr[j + 1] - c_arr[j]) / (3.0 * h[j])
+    x_arr = []
+    for i in range(n + 1):
+        x_arr.append(_flat_get(x, i))
+    return CubicSplineModel(x_arr, a, b_arr, c_arr, d_arr)
+
+# ---------------------------------------------------------------------------
+# 2D Grid Interpolation (Bilinear)
+# ---------------------------------------------------------------------------
+
+def _clamp(v, low, high):
+    if v < low:
+        return low
+    if v > high:
+        return high
+    return v
+
+def bilinear_interpolation(grid2d, y, x):
+    # Bilinear interpolation on a 2D grid at fractional (y, x).
+    h = grid2d.shape[0]
+    w = grid2d.shape[1]
+    x = _clamp(x, 0.0, w - 1.0)
+    y = _clamp(y, 0.0, h - 1.0)
+    x0 = int(tv.floor(x))
+    x1 = x0 + 1
+    if x1 > w - 1:
+        x1 = w - 1
+    y0 = int(tv.floor(y))
+    y1 = y0 + 1
+    if y1 > h - 1:
+        y1 = h - 1
+    dx = x - x0
+    dy = y - y0
+    v00 = grid2d.get([y0, x0])
+    v01 = grid2d.get([y0, x1])
+    v10 = grid2d.get([y1, x0])
+    v11 = grid2d.get([y1, x1])
+    top = v00 * (1.0 - dx) + v01 * dx
+    bottom = v10 * (1.0 - dx) + v11 * dx
+    return top * (1.0 - dy) + bottom * dy
+
+# ---------------------------------------------------------------------------
+# Radial Basis Function (RBF) Interpolation
+# ---------------------------------------------------------------------------
+
+def _rbf_phi(r, kernel, eps):
+    e_r = eps * r
+    if kernel == "gaussian":
+        return tv.exp(-(e_r) * (e_r))
+    if kernel == "inverse_multiquadric":
+        return 1.0 / tv.sqrt(1.0 + (e_r) * (e_r))
+    if kernel == "thin_plate":
+        if r > 1e-12:
+            return r * r * tv.log(r)
+        return 0.0
+    # default: multiquadric
+    return tv.sqrt(1.0 + (e_r) * (e_r))
+
+class RbfInterpolator:
+    # Multidimensional RBF interpolator over fitted nodes.
+    def __init__(self, nodes, weights, kernel, eps):
+        self.nodes = nodes
+        self.weights = weights
+        self.kernel = kernel
+        self.eps = eps
+
+    def evaluate(self, point):
+        n = self.nodes.shape[0]
+        d = self.nodes.shape[1]
+        sum_v = 0.0
+        for i in range(n):
+            dist_sq = 0.0
+            for dim in range(d):
+                diff = point.buffer.data[point.offset + dim] - self.nodes.get([i, dim])
+                dist_sq = dist_sq + diff * diff
+            r = tv.sqrt(dist_sq)
+            phi = _rbf_phi(r, self.kernel, self.eps)
+            sum_v = sum_v + self.weights.buffer.data[self.weights.offset + i] * phi
+        return sum_v
+
+def fit_rbf(nodes, values, kernel="multiquadric", epsilon=1.0):
+    # Fits RBF weights by solving the kernel system A w = values.
+    n = nodes.shape[0]
+    d = nodes.shape[1]
+    a_mat = NDArray([n, n])
+    for i in range(n):
+        for j in range(n):
+            dist_sq = 0.0
+            for dim in range(d):
+                diff = nodes.get([i, dim]) - nodes.get([j, dim])
+                dist_sq = dist_sq + diff * diff
+            r = tv.sqrt(dist_sq)
+            a_mat.set([i, j], _rbf_phi(r, kernel, epsilon))
+    if values.rank() == 1:
+        vals2d = values.reshape([n, 1])
+    else:
+        vals2d = values
+    weights = _linalg_solve(a_mat, vals2d).reshape([n])
+    return RbfInterpolator(nodes, weights, kernel, epsilon)
+
+# ---------------------------------------------------------------------------
+# Barycentric Interpolation
+# ---------------------------------------------------------------------------
+
+def barycentric_interpolation(x_nodes, y_nodes, x):
+    # High-order stable 1D barycentric polynomial interpolation.
+    n = x_nodes.total_length
+    for i in range(n):
+        if _abs(x - _flat_get(x_nodes, i)) < 1e-15:
+            return _flat_get(y_nodes, i)
+    num = 0.0
+    denom = 0.0
+    for j in range(n):
+        wj = 1.0
+        for k in range(n):
+            if k != j:
+                wj = wj / (_flat_get(x_nodes, j) - _flat_get(x_nodes, k))
+        term = wj / (x - _flat_get(x_nodes, j))
+        num = num + term * _flat_get(y_nodes, j)
+        denom = denom + term
+    return num / denom
+
+def _abs(v):
+    if v < 0.0:
+        return -v
+    return v

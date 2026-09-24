@@ -1,0 +1,251 @@
+# Copyright (c) TokenVector Project. All rights reserved.
+# Licensed under the MIT License.
+#
+# TV-1001: TokenVector (`.tkv`) translation of the Ops comparison + set + bitwise surface.
+# Source of truth (C# reference implementations, 1:1 sections):
+#   Ops/ComparisonOps.cs  -> greater_than, less_than, equal, ... (scalar + tensor)
+#   Ops/SetOperations.cs  -> intersect1d, union1d, setdiff1d, setxor1d, isin
+#   Ops/BitwiseOps.cs     -> bitwise_and/or/xor/not, left_shift, right_shift
+#
+# Fidelity notes:
+#   - Tensor comparisons broadcast via tv.engine (Stride-0 views) exactly as
+#     BroadcastEngine.BroadcastShapes in C#.
+#   - Set ops are built on tv.manipulation.unique (np.unique semantics).
+
+import tv
+from tv.core import NDArray, BoolNDArray, get_multi_index, broadcast_shapes
+from tv.manipulation import unique
+
+def _flat_get(arr, i):
+    return arr.get_flat(i)
+
+# ---------------------------------------------------------------------------
+# ComparisonOps  (Ops/ComparisonOps.cs)
+# ---------------------------------------------------------------------------
+
+def _compare_scalar(a, scalar, pred):
+    result = BoolNDArray(a.shape)
+    for i in range(a.total_length):
+        result.buffer[result.offset + i] = pred(a.get_flat(i), scalar)
+    return result
+
+def _compare_tensor(a, b, pred):
+    out_shape = broadcast_shapes(a.shape, b.shape)
+    res = BoolNDArray(out_shape)
+    b_a = a.broadcast_to(out_shape)
+    b_b = b.broadcast_to(out_shape)
+    for i in range(res.total_length):
+        coords = get_multi_index(i, out_shape)
+        res.buffer[res.offset + i] = pred(b_a.get(coords), b_b.get(coords))
+    return res
+
+def greater_than_scalar(a, scalar):
+    return _compare_scalar(a, scalar, lambda x, y: x > y)
+
+def greater_than_or_equal_scalar(a, scalar):
+    return _compare_scalar(a, scalar, lambda x, y: x >= y)
+
+def less_than_scalar(a, scalar):
+    return _compare_scalar(a, scalar, lambda x, y: x < y)
+
+def less_than_or_equal_scalar(a, scalar):
+    return _compare_scalar(a, scalar, lambda x, y: x <= y)
+
+def equal_scalar(a, scalar):
+    return _compare_scalar(a, scalar, lambda x, y: x == y)
+
+def not_equal_scalar(a, scalar):
+    return _compare_scalar(a, scalar, lambda x, y: x != y)
+
+def greater_than(a, b):
+    return _compare_tensor(a, b, lambda x, y: x > y)
+
+def less_than(a, b):
+    return _compare_tensor(a, b, lambda x, y: x < y)
+
+def equal(a, b):
+    # C# Equal<T>(NDArray, NDArray) tensor-tensor variant.
+    return _compare_tensor(a, b, lambda x, y: x == y)
+
+def not_equal(a, b):
+    # C# NotEqual<T>(NDArray, NDArray) tensor-tensor variant.
+    return _compare_tensor(a, b, lambda x, y: x != y)
+
+def greater_than_or_equal(a, b):
+    # C# GreaterThanOrEqual<T>(NDArray, NDArray) tensor-tensor variant.
+    return _compare_tensor(a, b, lambda x, y: x >= y)
+
+def less_than_or_equal(a, b):
+    # C# LessThanOrEqual<T>(NDArray, NDArray) tensor-tensor variant.
+    return _compare_tensor(a, b, lambda x, y: x <= y)
+
+# ---------------------------------------------------------------------------
+# SetOperations  (Ops/SetOperations.cs)
+# ---------------------------------------------------------------------------
+
+def _contains(values, v):
+    for x in values:
+        if x == v:
+            return True
+    return False
+
+def _sort_values(values):
+    arr = []
+    for v in values:
+        arr.append(v)
+    for i in range(1, len(arr)):
+        key = arr[i]
+        j = i - 1
+        while j >= 0 and arr[j] > key:
+            arr[j + 1] = arr[j]
+            j = j - 1
+        arr[j + 1] = key
+    return arr
+
+def _from_list(values):
+    result = NDArray([len(values)])
+    for i in range(len(values)):
+        result.buffer.data[result.offset + i] = values[i]
+    return result
+
+def intersect1d(ar1, ar2):
+    # Sorted unique values present in both arrays: np.intersect1d.
+    u1 = unique(ar1.contiguous())
+    u2 = unique(ar2.contiguous())
+    set2 = []
+    for i in range(u2.total_length):
+        set2.append(_flat_get(u2, i))
+    result_list = []
+    for i in range(u1.total_length):
+        v = _flat_get(u1, i)
+        if _contains(set2, v):
+            result_list.append(v)
+    return _from_list(_sort_values(result_list))
+
+def union1d(ar1, ar2):
+    # Sorted unique values in either array: np.union1d.
+    c1 = ar1.contiguous()
+    c2 = ar2.contiguous()
+    seen = []
+    for i in range(c1.total_length):
+        v = _flat_get(c1, i)
+        if not _contains(seen, v):
+            seen.append(v)
+    for i in range(c2.total_length):
+        v = _flat_get(c2, i)
+        if not _contains(seen, v):
+            seen.append(v)
+    return _from_list(_sort_values(seen))
+
+def setdiff1d(ar1, ar2):
+    # Unique values in ar1 not in ar2: np.setdiff1d.
+    u1 = unique(ar1.contiguous())
+    u2 = unique(ar2.contiguous())
+    set2 = []
+    for i in range(u2.total_length):
+        set2.append(_flat_get(u2, i))
+    result_list = []
+    for i in range(u1.total_length):
+        v = _flat_get(u1, i)
+        if not _contains(set2, v):
+            result_list.append(v)
+    return _from_list(_sort_values(result_list))
+
+def setxor1d(ar1, ar2):
+    # Symmetric difference: np.setxor1d.
+    diff1 = setdiff1d(ar1, ar2)
+    diff2 = setdiff1d(ar2, ar1)
+    return union1d(diff1, diff2)
+
+def isin(element, test_elements):
+    # Elementwise membership test: np.isin.
+    t_c = test_elements.contiguous()
+    test_set = []
+    for i in range(t_c.total_length):
+        test_set.append(_flat_get(t_c, i))
+    e_c = element.contiguous()
+    res = BoolNDArray(element.shape)
+    for i in range(element.total_length):
+        res.buffer[res.offset + i] = _contains(test_set, _flat_get(e_c, i))
+    return res
+
+# ---------------------------------------------------------------------------
+# BitwiseOps  (Ops/BitwiseOps.cs) — integer tensors
+# ---------------------------------------------------------------------------
+
+def bitwise_and(a, b):
+    # np.bitwise_and on integer tensors (stored as floats holding ints).
+    out_shape = broadcast_shapes(a.shape, b.shape)
+    res = NDArray(out_shape)
+    a_c = a.broadcast_to(out_shape).contiguous()
+    b_c = b.broadcast_to(out_shape).contiguous()
+    for i in range(res.total_length):
+        res.buffer.data[res.offset + i] = _to_int(_flat_get(a_c, i)) & _to_int(_flat_get(b_c, i))
+    return res
+
+def bitwise_or(a, b):
+    out_shape = broadcast_shapes(a.shape, b.shape)
+    res = NDArray(out_shape)
+    a_c = a.broadcast_to(out_shape).contiguous()
+    b_c = b.broadcast_to(out_shape).contiguous()
+    for i in range(res.total_length):
+        res.buffer.data[res.offset + i] = _to_int(_flat_get(a_c, i)) | _to_int(_flat_get(b_c, i))
+    return res
+
+def bitwise_xor(a, b):
+    out_shape = broadcast_shapes(a.shape, b.shape)
+    res = NDArray(out_shape)
+    a_c = a.broadcast_to(out_shape).contiguous()
+    b_c = b.broadcast_to(out_shape).contiguous()
+    for i in range(res.total_length):
+        res.buffer.data[res.offset + i] = _to_int(_flat_get(a_c, i)) ^ _to_int(_flat_get(b_c, i))
+    return res
+
+def bitwise_not(a):
+    # np.bitwise_not (~a).
+    res = NDArray(a.shape)
+    a_c = a.contiguous()
+    for i in range(res.total_length):
+        res.buffer.data[res.offset + i] = ~_to_int(_flat_get(a_c, i))
+    return res
+
+def left_shift(a, shift):
+    # np.left_shift (a << shift).
+    res = NDArray(a.shape)
+    a_c = a.contiguous()
+    for i in range(res.total_length):
+        res.buffer.data[res.offset + i] = _to_int(_flat_get(a_c, i)) << shift
+    return res
+
+def right_shift(a, shift):
+    # np.right_shift (a >> shift).
+    res = NDArray(a.shape)
+    a_c = a.contiguous()
+    for i in range(res.total_length):
+        res.buffer.data[res.offset + i] = _to_int(_flat_get(a_c, i)) >> shift
+    return res
+
+def bitwise_count(a):
+    # np.bitwise_count: number of 1-bits in the absolute integer value.
+    res = NDArray(a.shape)
+    a_c = a.contiguous()
+    for i in range(res.total_length):
+        v = _abs(_to_int(_flat_get(a_c, i)))
+        count = 0
+        while v > 0:
+            if v % 2 == 1:
+                count = count + 1
+            v = v // 2
+        res.buffer.data[res.offset + i] = count
+    return res
+
+def _abs(v):
+    if v < 0:
+        return -v
+    return v
+
+def _to_int(v):
+    # Truncate a float-stored integer toward zero.
+    if v >= 0.0:
+        return int(v)
+    return -int(-v)

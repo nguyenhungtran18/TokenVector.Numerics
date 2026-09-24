@@ -17,3 +17,10 @@ internal/
 ## OS generated
 .DS_Store
 Thumbs.db
+
+## Python (TV verification harness)
+__pycache__/
+*.pyc
+
+## Freebuff local tool state
+.freebuff/

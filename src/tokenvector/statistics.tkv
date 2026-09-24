@@ -1,0 +1,601 @@
+# Copyright (c) TokenVector Project. All rights reserved.
+# Licensed under the MIT License.
+#
+# TV-1001: TokenVector (`.tkv`) translation of the **Statistics** module.
+# Source of truth (C# reference implementations, 1:1 sections):
+#   Statistics/DistributionsAndTests.cs -> Normal/Exponential/Uniform/StudentT
+#       PDF+CDF+PPF (Beasley-Springer-Moro), Skewness, Kurtosis, Histogram1D,
+#       TTest1Sample, TTestInd, ANOVA1Way, ChiSquareTest
+#   Statistics/TimeSeriesAndKalman.cs   -> KalmanFilter1D, KalmanFilterND,
+#       SimpleExponentialSmoothing, HoltLinearTrend, Autocorrelation, PACF
+#
+# Fidelity notes:
+#   - NormalPPF keeps the full Beasley-Springer-Moro rational coefficients.
+#   - Kalman equations x=F x, P=F P F^T + Q, K=P H^T S^-1, P=(I-KH)P preserved.
+
+import tv
+from tv.core import NDArray
+from tv.linalg import matmul, inverse as _inverse
+from tv.special import erf_scalar, log_gamma_scalar
+
+_PI = 3.14159265358979323846
+
+def _flat_get(arr, i):
+    return arr.get_flat(i)
+
+def _abs(v):
+    if v < 0.0:
+        return -v
+    return v
+
+def _clamp(v, low, high):
+    if v < low:
+        return low
+    if v > high:
+        return high
+    return v
+
+def _mat_add(a, b):
+    result = NDArray(a.shape)
+    for i in range(a.total_length):
+        result.buffer.data[result.offset + i] = a.buffer.data[a.offset + i] + b.buffer.data[b.offset + i]
+    return result
+
+def _mat_sub(a, b):
+    result = NDArray(a.shape)
+    for i in range(a.total_length):
+        result.buffer.data[result.offset + i] = a.buffer.data[a.offset + i] - b.buffer.data[b.offset + i]
+    return result
+
+# ---------------------------------------------------------------------------
+# Continuous Distributions (PDF & CDF)
+# ---------------------------------------------------------------------------
+
+def normal_pdf(x, mu=0.0, sigma=1.0):
+    z = (x - mu) / sigma
+    return (1.0 / (sigma * tv.sqrt(2.0 * _PI))) * tv.exp(-0.5 * z * z)
+
+def normal_cdf(x, mu=0.0, sigma=1.0):
+    z = (x - mu) / (sigma * tv.sqrt(2.0))
+    return 0.5 * (1.0 + erf_scalar(z))
+
+def normal_ppf(p, mu=0.0, sigma=1.0):
+    # Inverse normal CDF (Beasley-Springer-Moro rational approximation).
+    if p <= 0.0 or p >= 1.0:
+        raise ValueError("p must be in (0, 1)")
+    a0 = 2.50662823884
+    a1 = -18.61500062529
+    a2 = 41.39119773534
+    a3 = -25.44106049637
+    b0 = -8.47351093090
+    b1 = 23.08336743743
+    b2 = -21.06224101826
+    b3 = 3.13082909833
+    c0 = 0.3374754822726147
+    c1 = 0.9761690190917186
+    c2 = 0.1607979714918209
+    c3 = 0.0276438810330127
+    c4 = 0.0038405729373609
+    c5 = 0.0003951896511919
+    c6 = 0.0000321767881768
+    c7 = 0.0000002888167364
+    c8 = 0.0000003960315187
+    y = p - 0.5
+    if _abs(y) < 0.42:
+        r = y * y
+        z = y * (((a3 * r + a2) * r + a1) * r + a0) / ((((b3 * r + b2) * r + b1) * r + b0) * r + 1.0)
+    else:
+        if p < 0.5:
+            r = p
+        else:
+            r = 1.0 - p
+        s = tv.log(-tv.log(r))
+        z = c0 + s * (c1 + s * (c2 + s * (c3 + s * (c4 + s * (c5 + s * (c6 + s * (c7 + s * c8)))))))
+        if p < 0.5:
+            z = -z
+    return mu + sigma * z
+
+def exponential_pdf(x, lam):
+    if x < 0.0:
+        return 0.0
+    return lam * tv.exp(-lam * x)
+
+def exponential_cdf(x, lam):
+    if x < 0.0:
+        return 0.0
+    return 1.0 - tv.exp(-lam * x)
+
+def uniform_pdf(x, a, b):
+    if x >= a and x <= b:
+        return 1.0 / (b - a)
+    return 0.0
+
+def uniform_cdf(x, a, b):
+    if x < a:
+        return 0.0
+    if x > b:
+        return 1.0
+    return (x - a) / (b - a)
+
+def student_t_pdf(x, df):
+    num = tv.exp(log_gamma_scalar((df + 1.0) / 2.0))
+    denom = tv.sqrt(df * _PI) * tv.exp(log_gamma_scalar(df / 2.0))
+    return (num / denom) * _pow_f(1.0 + (x * x) / df, -(df + 1.0) / 2.0)
+
+def _pow_f(base, exponent):
+    return tv.exp(exponent * tv.log(base))
+
+# ---------------------------------------------------------------------------
+# Moments & Descriptive Statistics
+# ---------------------------------------------------------------------------
+
+def skewness(data):
+    # Third standardized moment.
+    n = data.total_length
+    if n < 3:
+        return 0.0
+    mean = 0.0
+    for i in range(n):
+        mean = mean + _flat_get(data, i)
+    mean = mean / n
+    m2 = 0.0
+    m3 = 0.0
+    for i in range(n):
+        diff = _flat_get(data, i) - mean
+        m2 = m2 + diff * diff
+        m3 = m3 + diff * diff * diff
+    m2 = m2 / n
+    m3 = m3 / n
+    s = tv.sqrt(m2)
+    if s > 1e-15:
+        return m3 / (s * s * s)
+    return 0.0
+
+def kurtosis(data, fisher=True):
+    # Fourth standardized moment (Fisher: excess kurtosis).
+    n = data.total_length
+    if n < 4:
+        return 0.0
+    mean = 0.0
+    for i in range(n):
+        mean = mean + _flat_get(data, i)
+    mean = mean / n
+    m2 = 0.0
+    m4 = 0.0
+    for i in range(n):
+        diff = _flat_get(data, i) - mean
+        d2 = diff * diff
+        m2 = m2 + d2
+        m4 = m4 + d2 * d2
+    m2 = m2 / n
+    m4 = m4 / n
+    if m2 > 1e-15:
+        k = m4 / (m2 * m2)
+    else:
+        k = 0.0
+    if fisher:
+        return k - 3.0
+    return k
+
+def histogram_1d(data, bins=10, min_val=None, max_val=None):
+    # 1D histogram -> [counts (ints), bin_edges].
+    n = data.total_length
+    if min_val is None:
+        min_v = 1.7976931348623157e308
+        max_v = -1.7976931348623157e308
+        for i in range(n):
+            v = _flat_get(data, i)
+            if v < min_v:
+                min_v = v
+            if v > max_v:
+                max_v = v
+    else:
+        min_v = min_val
+        max_v = max_val
+    if max_v <= min_v:
+        max_v = min_v + 1.0
+    counts = NDArray([bins])
+    bin_edges = NDArray([bins + 1])
+    step = (max_v - min_v) / bins
+    for i in range(bins + 1):
+        bin_edges.buffer.data[bin_edges.offset + i] = min_v + i * step
+    for i in range(n):
+        val = _flat_get(data, i)
+        if val >= min_v and val <= max_v:
+            b = int((val - min_v) / step)
+            if b >= bins:
+                b = bins - 1
+            counts.buffer.data[counts.offset + b] = counts.buffer.data[counts.offset + b] + 1
+    return [counts, bin_edges]
+
+# ---------------------------------------------------------------------------
+# Hypothesis Testing
+# ---------------------------------------------------------------------------
+
+def ttest_1sample(data, mu0=0.0):
+    # 1-sample t-test -> [t_statistic, two_tailed_p_value].
+    n = data.total_length
+    if n < 2:
+        raise ValueError("Sample size must be at least 2")
+    sum_v = 0.0
+    for i in range(n):
+        sum_v = sum_v + _flat_get(data, i)
+    mean = sum_v / n
+    sum_sq = 0.0
+    for i in range(n):
+        d = _flat_get(data, i) - mean
+        sum_sq = sum_sq + d * d
+    s = tv.sqrt(sum_sq / (n - 1))
+    se = s / tv.sqrt(n)
+    if se > 1e-15:
+        t = (mean - mu0) / se
+    else:
+        t = 0.0
+    p = 2.0 * (1.0 - normal_cdf(_abs(t)))
+    return [t, _clamp(p, 0.0, 1.0)]
+
+def ttest_ind(a, b):
+    # Independent 2-sample t-test -> [t_statistic, p_value].
+    n1 = a.total_length
+    n2 = b.total_length
+    sum1 = 0.0
+    sum2 = 0.0
+    for i in range(n1):
+        sum1 = sum1 + _flat_get(a, i)
+    for i in range(n2):
+        sum2 = sum2 + _flat_get(b, i)
+    m1 = sum1 / n1
+    m2 = sum2 / n2
+    s1_sq = 0.0
+    s2_sq = 0.0
+    for i in range(n1):
+        d = _flat_get(a, i) - m1
+        s1_sq = s1_sq + d * d
+    for i in range(n2):
+        d = _flat_get(b, i) - m2
+        s2_sq = s2_sq + d * d
+    sp_sq = (s1_sq + s2_sq) / (n1 + n2 - 2)
+    se = tv.sqrt(sp_sq * (1.0 / n1 + 1.0 / n2))
+    if se > 1e-15:
+        t = (m1 - m2) / se
+    else:
+        t = 0.0
+    p = 2.0 * (1.0 - normal_cdf(_abs(t)))
+    return [t, _clamp(p, 0.0, 1.0)]
+
+def anova_1way(groups):
+    # 1-way ANOVA F-test across groups (list of NDArrays).
+    k = len(groups)
+    if k < 2:
+        raise ValueError("At least 2 groups required for ANOVA")
+    total_n = 0
+    total_sum = 0.0
+    group_means = []
+    group_sizes = []
+    for i in range(k):
+        group_sizes.append(groups[i].total_length)
+        total_n = total_n + group_sizes[i]
+        g_sum = 0.0
+        for j in range(group_sizes[i]):
+            g_sum = g_sum + _flat_get(groups[i], j)
+        group_means.append(g_sum / group_sizes[i])
+        total_sum = total_sum + g_sum
+    grand_mean = total_sum / total_n
+    # Between-group sum of squares
+    ssb = 0.0
+    for i in range(k):
+        diff = group_means[i] - grand_mean
+        ssb = ssb + group_sizes[i] * diff * diff
+    msb = ssb / (k - 1)
+    # Within-group sum of squares
+    ssw = 0.0
+    for i in range(k):
+        for j in range(group_sizes[i]):
+            diff = _flat_get(groups[i], j) - group_means[i]
+            ssw = ssw + diff * diff
+    msw = ssw / (total_n - k)
+    if msw > 1e-15:
+        f = msb / msw
+    else:
+        f = 0.0
+    p = tv.exp(-0.5 * f)  # fast asymptotic estimate
+    return [f, _clamp(p, 0.0, 1.0)]
+
+def chi_square_test(observed, expected):
+    # Pearson chi-square goodness-of-fit -> [chi2, p_value].
+    n = observed.total_length
+    chi2 = 0.0
+    for i in range(n):
+        diff = _flat_get(observed, i) - _flat_get(expected, i)
+        if _flat_get(expected, i) > 1e-15:
+            chi2 = chi2 + (diff * diff) / _flat_get(expected, i)
+    p = tv.exp(-0.5 * chi2)  # asymptotic p-value approximation
+    return [chi2, _clamp(p, 0.0, 1.0)]
+
+# ---------------------------------------------------------------------------
+# Kalman Filters  (TimeSeriesAndKalman.cs)
+# ---------------------------------------------------------------------------
+
+class KalmanFilter1D:
+    # 1D Kalman filter with scalar Gaussian noise.
+    def __init__(self, initial_state, initial_variance, process_noise, measurement_noise):
+        self.state = initial_state
+        self.variance = initial_variance
+        self.process_noise = process_noise
+        self.measurement_noise = measurement_noise
+
+    def predict(self, u=0.0):
+        self.state = self.state + u
+        self.variance = self.variance + self.process_noise
+
+    def update(self, measurement):
+        k = self.variance / (self.variance + self.measurement_noise)
+        self.state = self.state + k * (measurement - self.state)
+        self.variance = (1.0 - k) * self.variance
+        return self.state
+
+class KalmanFilterND:
+    # Multi-dimensional linear Kalman filter: x_k = F x_{k-1} + w, z_k = H x_k + v.
+    def __init__(self, initial_state, initial_cov, f, h, q, r):
+        self.state = initial_state.clone()
+        self.covariance = initial_cov.clone()
+        self.f = f.clone()
+        self.h = h.clone()
+        self.q = q.clone()
+        self.r = r.clone()
+
+    def predict(self):
+        # x = F * x ; P = F P F^T + Q
+        self.state = matmul(self.f, self.state)
+        fp = matmul(self.f, self.covariance)
+        fpf_t = matmul(fp, self.f.matrix_transpose())
+        self.covariance = _mat_add(fpf_t, self.q)
+
+    def update(self, measurement):
+        # y = z - H x (innovation)
+        hx = matmul(self.h, self.state)
+        y = _mat_sub(measurement, hx)
+        # S = H P H^T + R
+        hp = matmul(self.h, self.covariance)
+        s = _mat_add(matmul(hp, self.h.matrix_transpose()), self.r)
+        # K = P H^T S^-1
+        s_inv = _inverse(s)
+        pht = matmul(self.covariance, self.h.matrix_transpose())
+        k = matmul(pht, s_inv)
+        # x = x + K y
+        self.state = _mat_add(self.state, matmul(k, y))
+        # P = (I - K H) P
+        dim_x = self.state.shape[0]
+        i_mat = NDArray([dim_x, dim_x])
+        for i in range(dim_x):
+            i_mat.set([i, i], 1.0)
+        kh = matmul(k, self.h)
+        i_minus_kh = _mat_sub(i_mat, kh)
+        self.covariance = matmul(i_minus_kh, self.covariance)
+        return self.state
+
+# ---------------------------------------------------------------------------
+# Exponential Smoothing (Simple, Holt)
+# ---------------------------------------------------------------------------
+
+def simple_exponential_smoothing(series, alpha):
+    # S_t = alpha * Y_t + (1 - alpha) * S_{t-1}.
+    s = series.contiguous()
+    n = s.total_length
+    res = NDArray([n])
+    if n == 0:
+        return res
+    res.buffer.data[res.offset] = _flat_get(s, 0)
+    for i in range(1, n):
+        res.buffer.data[res.offset + i] = alpha * _flat_get(s, i) + (1.0 - alpha) * _flat_get(res, i - 1)
+    return res
+
+def holt_linear_trend(series, alpha, beta, forecast_steps=5):
+    # Holt's linear trend forecasting -> [fitted, forecast].
+    y = series.contiguous()
+    n = y.total_length
+    fitted = NDArray([n])
+    if n < 2:
+        raise ValueError("Holt linear trend requires at least 2 points")
+    level = _flat_get(y, 0)
+    trend = _flat_get(y, 1) - _flat_get(y, 0)
+    fitted.buffer.data[fitted.offset] = level
+    for i in range(1, n):
+        prev_level = level
+        level = alpha * _flat_get(y, i) + (1.0 - alpha) * (prev_level + trend)
+        trend = beta * (level - prev_level) + (1.0 - beta) * trend
+        fitted.buffer.data[fitted.offset + i] = level + trend
+    forecast = NDArray([forecast_steps])
+    for h in range(1, forecast_steps + 1):
+        forecast.buffer.data[forecast.offset + h - 1] = level + h * trend
+    return [fitted, forecast]
+
+# ---------------------------------------------------------------------------
+# Autocorrelation & Partial Autocorrelation (ACF & PACF)
+# ---------------------------------------------------------------------------
+
+def autocorrelation(series, max_lag):
+    # Sample ACF up to max_lag.
+    y = series.contiguous()
+    n = y.total_length
+    if max_lag >= n:
+        max_lag = n - 1
+    mean = 0.0
+    for i in range(n):
+        mean = mean + _flat_get(y, i)
+    mean = mean / n
+    variance = 0.0
+    for i in range(n):
+        diff = _flat_get(y, i) - mean
+        variance = variance + diff * diff
+    acf = NDArray([max_lag + 1])
+    acf.buffer.data[acf.offset] = 1.0
+    for k in range(1, max_lag + 1):
+        auto_cov = 0.0
+        for i in range(n - k):
+            auto_cov = auto_cov + (_flat_get(y, i) - mean) * (_flat_get(y, i + k) - mean)
+        if variance > 1e-15:
+            acf.buffer.data[acf.offset + k] = auto_cov / variance
+        else:
+            acf.buffer.data[acf.offset + k] = 0.0
+    return acf
+
+def partial_autocorrelation(series, max_lag):
+    # Sample PACF via Durbin-Levinson recursion.
+    r = autocorrelation(series, max_lag).contiguous()
+    p = max_lag
+    pacf = NDArray([p + 1])
+    pacf.buffer.data[pacf.offset] = 1.0
+    if p == 0:
+        return pacf
+    phi = []
+    prev_phi = []
+    for i in range(p + 1):
+        phi.append(0.0)
+        prev_phi.append(0.0)
+    phi[1] = _flat_get(r, 1)
+    pacf.buffer.data[pacf.offset + 1] = phi[1]
+    for k in range(2, p + 1):
+        for j in range(1, k):
+            prev_phi[j] = phi[j]
+        num = _flat_get(r, k)
+        denom = 1.0
+        for j in range(1, k):
+            num = num - prev_phi[j] * _flat_get(r, k - j)
+            denom = denom - prev_phi[j] * _flat_get(r, j)
+        if _abs(denom) > 1e-15:
+            phi[k] = num / denom
+        else:
+            phi[k] = 0.0
+        pacf.buffer.data[pacf.offset + k] = phi[k]
+        for j in range(1, k):
+            phi[j] = prev_phi[j] - phi[k] * prev_phi[k - j]
+    return pacf
+
+# ---------------------------------------------------------------------------
+# NumPy-parity gap fill  (histogram family, post TV-1001 audit)
+# ---------------------------------------------------------------------------
+
+def _flat_min_max(a):
+    # [min, max] over all elements (ignores nothing — matches np.histogram
+    # default range=(a.min, a.max)).
+    lo = a.get_flat(0)
+    hi = a.get_flat(0)
+    for i in range(1, a.total_length):
+        v = a.get_flat(i)
+        if v < lo:
+            lo = v
+        if v > hi:
+            hi = v
+    return [lo, hi]
+
+def histogram_bin_edges(a, bins=10, range_v=None):
+    # np.histogram_bin_edges (uniform-width bins over the given range).
+    if range_v is None:
+        bounds = _flat_min_max(a)
+    else:
+        bounds = [range_v[0], range_v[1]]
+    start = bounds[0]
+    stop = bounds[1]
+    if stop == start:
+        start = start - 0.5
+        stop = stop + 0.5
+    width = (stop - start) / bins
+    edges = NDArray([bins + 1])
+    for i in range(bins + 1):
+        edges.buffer.data[edges.offset + i] = start + i * width
+    return edges
+
+def histogram(a, bins=10, range_v=None):
+    # np.histogram -> [counts, edges]; last bin is closed on the right.
+    edges = histogram_bin_edges(a, bins, range_v)
+    counts = NDArray([bins])
+    for i in range(a.total_length):
+        v = a.get_flat(i)
+        k = bins - 1
+        for b in range(bins):
+            hi = edges.get_flat(b + 1)
+            if v < hi or (b == bins - 1 and v <= hi):
+                k = b
+                break
+        counts.buffer.data[counts.offset + k] = counts.buffer.data[counts.offset + k] + 1.0
+    return [counts, edges]
+
+def histogram2d(x, y, bins=10, range_v=None):
+    # np.histogram2d -> [H, xedges, yedges] with H[i, j] = count(x in bin i,
+    # y in bin j) row-major over x bins.
+    x_edges = histogram_bin_edges(x, bins, range_v)
+    y_edges = histogram_bin_edges(y, bins, range_v)
+    h = NDArray([bins, bins])
+    for i in range(x.total_length):
+        xv = x.get_flat(i)
+        yv = y.get_flat(i)
+        kx = bins - 1
+        for b in range(bins):
+            hi = x_edges.get_flat(b + 1)
+            if xv < hi or (b == bins - 1 and xv <= hi):
+                kx = b
+                break
+        ky = bins - 1
+        for b in range(bins):
+            hi = y_edges.get_flat(b + 1)
+            if yv < hi or (b == bins - 1 and yv <= hi):
+                ky = b
+                break
+        cur = h.get([kx, ky])
+        h.set([kx, ky], cur + 1.0)
+    return [h, x_edges, y_edges]
+
+def histogramdd(sample, bins=10, range_v=None):
+    # np.histogramdd over an [N, D] tensor -> [flat_counts, [edges per dim]]
+    # (counts flattened row-major; edges returned as a list of NDArrays).
+    n = sample.shape[0]
+    dims = sample.shape[1]
+    if range_v is None:
+        bounds = []
+        for d in range(dims):
+            column = NDArray([n])
+            for i in range(n):
+                column.buffer.data[column.offset + i] = sample.get([i, d])
+            bounds.append(_flat_min_max(column))
+    else:
+        bounds = []
+        for d in range(dims):
+            bounds.append([range_v[d][0], range_v[d][1]])
+    widths = []
+    offsets = []
+    for d in range(dims):
+        start = bounds[d][0]
+        stop = bounds[d][1]
+        if stop == start:
+            start = start - 0.5
+            stop = stop + 0.5
+        offsets.append(start)
+        widths.append((stop - start) / bins)
+    total = 1
+    for d in range(dims):
+        total = total * bins
+    counts = NDArray([total])
+    for i in range(n):
+        flat_idx = 0
+        inside = True
+        for d in range(dims):
+            v = sample.get([i, d])
+            k = bins - 1
+            for b in range(bins):
+                hi = offsets[d] + (b + 1) * widths[d]
+                if v < hi or (b == bins - 1 and v <= hi):
+                    k = b
+                    break
+            if v < offsets[d]:
+                inside = False
+            flat_idx = flat_idx * bins + k
+        if inside:
+            counts.buffer.data[counts.offset + flat_idx] = counts.buffer.data[counts.offset + flat_idx] + 1.0
+    edges_per_dim = []
+    for d in range(dims):
+        edges = NDArray([bins + 1])
+        for i in range(bins + 1):
+            edges.buffer.data[edges.offset + i] = offsets[d] + i * widths[d]
+        edges_per_dim.append(edges)
+    return [counts, edges_per_dim]

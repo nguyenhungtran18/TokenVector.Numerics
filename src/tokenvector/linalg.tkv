@@ -1,0 +1,988 @@
+# Copyright (c) TokenVector Project. All rights reserved.
+# Licensed under the MIT License.
+#
+# TV-1001: TokenVector (`.tkv`) translation of the TokenVector.Numerics **LinAlg** module.
+# Source of truth (C# reference implementations, 1:1 sections):
+#   LinAlg/MatrixMultiplication.cs -> matmul / batch_matmul
+#   LinAlg/MatrixOps.cs            -> kron, outer, matrix_power, norm
+#   LinAlg/Decomposition.cs        -> lu, qr, cholesky, solve, inverse, det, trace, schur, solve_sylvester
+#   LinAlg/EinSum.cs               -> einsum
+#   LinAlg/Eigen.cs                -> eigh (Jacobi eigenvalue algorithm)
+#   LinAlg/SVD.cs                  -> svd (one-sided Jacobi, wide-matrix path)
+#
+# Fidelity notes:
+#   - `Parallel.For` blocks and AVX2 inner loops in C# collapse to sequential
+#     scalar loops; `tkvc -O parallel -O simd` restores both at the CIL level.
+#   - Every algorithm is kept numerically identical: same pivoting, same
+#     Householder sign conventions, same Jacobi rotation formulas, same
+#     iteration limits (MaxIterations=100, MaxSweeps=100, maxIter=300).
+
+import tv
+from tv.core import NDArray, eye_rc, row_major_strides, get_multi_index, shape_total_length, broadcast_shapes
+
+def _copy_into(dst, src):
+    for i in range(src.total_length):
+        dst.buffer.data[dst.offset + i] = src.get_flat(i)
+
+def _zeros(shape, dtype="f64"):
+    return NDArray(shape, dtype=dtype)
+
+def _full(value, shape, dtype="f64"):
+    result = NDArray(shape, dtype=dtype)
+    for i in range(result.total_length):
+        result.buffer.data[result.offset + i] = value
+    return result
+
+def _eye(n, dtype="f64"):
+    return eye_rc(n, n, dtype=dtype)
+
+def _flat_get(arr, idx):
+    return arr.get_flat(idx)
+
+def _flat_set(arr, idx, value):
+    arr.set_flat(idx, value)
+
+def _abs(v):
+    if v < 0.0:
+        return -v
+    return v
+
+def _sqrt(v):
+    # Newton-Raphson refinement from the language-primitive fast estimate.
+    if v <= 0.0:
+        # v == 0 exactly (e.g. a zero column in one-sided Jacobi SVD).
+        return 0.0
+    est = tv.sqrt(v)
+    for i in range(2):
+        est = 0.5 * (est + v / est)
+    return est
+
+# ---------------------------------------------------------------------------
+# MatrixMultiplication  (LinAlg/MatrixMultiplication.cs)
+# ---------------------------------------------------------------------------
+
+def matmul_2d(a, b, m, k, n, dtype="f64"):
+    # Cache-tiled (32x32) 2D multiplication; parallel + SIMD when lowered.
+    # Hot loop uses raw flat-index arithmetic on the contiguous buffers
+    # (mirrors the C# unsafe pointer path) instead of per-element get(),
+    # and walks j inside the k loop for unit-stride reads of b.
+    block_size = 32
+    result = _zeros([m, n], dtype=dtype)
+    a_c = a.contiguous()
+    b_c = b.contiguous()
+    a_data = a_c.buffer.data
+    b_data = b_c.buffer.data
+    r_data = result.buffer.data
+    a_base = a_c.offset
+    b_base = b_c.offset
+    r_base = result.offset
+    for bi in range(0, (m + block_size - 1) // block_size):
+        i_start = bi * block_size
+        i_end = i_start + block_size
+        if i_end > m:
+            i_end = m
+        for bk in range(0, k, block_size):
+            k_end = bk + block_size
+            if k_end > k:
+                k_end = k
+            for bj in range(0, n, block_size):
+                j_end = bj + block_size
+                if j_end > n:
+                    j_end = n
+                for i in range(i_start, i_end):
+                    a_row = a_base + i * k
+                    r_row = r_base + i * n
+                    for kk in range(bk, k_end):
+                        a_val = a_data[a_row + kk]
+                        b_row = b_base + kk * n
+                        for j in range(bj, j_end):
+                            r_data[r_row + j] = r_data[r_row + j] + a_val * b_data[b_row + j]
+    return result
+
+def batch_matmul(a, b, m, k, n, dtype="f64"):
+    # Batched N-D multiplication with broadcast batch dimensions.
+    a_batch_shape = []
+    for d in range(a.rank() - 2):
+        a_batch_shape.append(a.shape[d])
+    b_batch_shape = []
+    for d in range(b.rank() - 2):
+        b_batch_shape.append(b.shape[d])
+    out_batch_shape = broadcast_shapes(a_batch_shape, b_batch_shape)
+    out_shape = []
+    for d in range(len(out_batch_shape)):
+        out_shape.append(out_batch_shape[d])
+    out_shape.append(m)
+    out_shape.append(n)
+
+    result = _zeros(out_shape, dtype=dtype)
+    total_batches = shape_total_length(out_batch_shape)
+    a_batch_stride = a.shape[a.rank() - 2] * a.shape[a.rank() - 1]
+    b_batch_stride = b.shape[b.rank() - 2] * b.shape[b.rank() - 1]
+    out_batch_stride = m * n
+    a_c = a.contiguous()
+    b_c = b.contiguous()
+
+    for batch_idx in range(total_batches):
+        batch_coords = get_multi_index(batch_idx, out_batch_shape)
+        a_offset = 0
+        b_offset = 0
+        for d in range(len(out_batch_shape)):
+            if d < len(a_batch_shape):
+                a_dim_idx = 0
+                if a_batch_shape[d] != 1:
+                    a_dim_idx = batch_coords[d]
+            else:
+                a_dim_idx = 0
+            if d < len(b_batch_shape):
+                b_dim_idx = 0
+                if b_batch_shape[d] != 1:
+                    b_dim_idx = batch_coords[d]
+            else:
+                b_dim_idx = 0
+            if d < len(a_batch_shape):
+                a_dim_stride = a_c.strides[d]
+            else:
+                a_dim_stride = 0
+            if d < len(b_batch_shape):
+                b_dim_stride = b_c.strides[d]
+            else:
+                b_dim_stride = 0
+            a_offset = a_offset + a_dim_idx * a_dim_stride
+            b_offset = b_offset + b_dim_idx * b_dim_stride
+
+        out_offset = batch_idx * out_batch_stride
+        a_data = a_c.buffer.data
+        b_data = b_c.buffer.data
+        r_data = result.buffer.data
+        for i in range(m):
+            a_row = a_offset + i * k
+            r_row = out_offset + i * n
+            for kk in range(k):
+                a_val = a_data[a_row + kk]
+                b_row = b_offset + kk * n
+                for j in range(n):
+                    r_data[r_row + j] = r_data[r_row + j] + a_val * b_data[b_row + j]
+    return result
+
+def matmul(a, b):
+    # Multiplies two matrices (2D or batched N-D): C = A @ B.
+    if a.rank() < 2 or b.rank() < 2:
+        raise ValueError("MatMul requires tensors with at least 2 dimensions")
+    m = a.shape[a.rank() - 2]
+    k_a = a.shape[a.rank() - 1]
+    k_b = b.shape[b.rank() - 2]
+    n = b.shape[b.rank() - 1]
+    if k_a != k_b:
+        raise ValueError("Inner matrix dimensions must agree")
+    if a.rank() == 2 and b.rank() == 2:
+        return matmul_2d(a, b, m, k_a, n)
+    return batch_matmul(a, b, m, k_a, n)
+
+# ---------------------------------------------------------------------------
+# MatrixOps  (LinAlg/MatrixOps.cs)
+# ---------------------------------------------------------------------------
+
+def kron(a, b):
+    # Kronecker product: np.kron.
+    if a.rank() != 2 or b.rank() != 2:
+        raise ValueError("Kron currently expects 2D matrices")
+    ra = a.shape[0]
+    ca = a.shape[1]
+    rb = b.shape[0]
+    cb = b.shape[1]
+    out_r = ra * rb
+    out_c = ca * cb
+    result = _zeros([out_r, out_c])
+    a_c = a.contiguous()
+    b_c = b.contiguous()
+    for i in range(ra):
+        for j in range(ca):
+            a_val = a_c.buffer.data[a_c.offset + i * ca + j]
+            for k2 in range(rb):
+                for l2 in range(cb):
+                    b_val = b_c.buffer.data[b_c.offset + k2 * cb + l2]
+                    result.buffer.data[result.offset + (i * rb + k2) * out_c + (j * cb + l2)] = a_val * b_val
+    return result
+
+def outer(a, b):
+    # Outer product: np.outer.
+    a_flat = a.contiguous()
+    b_flat = b.contiguous()
+    len_a = a_flat.total_length
+    len_b = b_flat.total_length
+    result = _zeros([len_a, len_b])
+    for i in range(len_a):
+        ai = a_flat.buffer.data[a_flat.offset + i]
+        for j in range(len_b):
+            result.buffer.data[result.offset + i * len_b + j] = ai * b_flat.buffer.data[b_flat.offset + j]
+    return result
+
+def matrix_power(a, n):
+    # Square matrix to integer power: np.linalg.matrix_power.
+    if a.rank() != 2 or a.shape[0] != a.shape[1]:
+        raise ValueError("MatrixPower requires a square 2D matrix")
+    dim = a.shape[0]
+    if n == 0:
+        return _eye(dim)
+    if n < 0:
+        base_mat = inverse(a)
+        exp = -n
+    else:
+        base_mat = a.clone()
+        exp = n
+    result = _eye(dim)
+    while exp > 0:
+        if exp % 2 == 1:
+            result = matmul(result, base_mat)
+        base_mat = matmul(base_mat, base_mat)
+        exp = exp // 2
+    return result
+
+def norm(x, ord="fro"):
+    # Matrix/vector norm: "fro" | "2" | "1" | "inf".
+    contig = x.contiguous()
+    total = contig.total_length
+    o = ord
+    if o == "FRO":
+        o = "fro"
+    if o == "fro" or o == "2":
+        sum_sq = 0.0
+        for i in range(total):
+            v = contig.buffer.data[contig.offset + i]
+            sum_sq = sum_sq + v * v
+        return _sqrt(sum_sq)
+    if o == "1":
+        sum_abs = 0.0
+        for i in range(total):
+            v = contig.buffer.data[contig.offset + i]
+            if v < 0.0:
+                v = -v
+            sum_abs = sum_abs + v
+        return sum_abs
+    if o == "inf":
+        max_abs = 0.0
+        for i in range(total):
+            v = contig.buffer.data[contig.offset + i]
+            if v < 0.0:
+                v = -v
+            if v > max_abs:
+                max_abs = v
+        return max_abs
+    raise ValueError("Norm order not supported")
+
+# ---------------------------------------------------------------------------
+# Decomposition  (LinAlg/Decomposition.cs)
+# ---------------------------------------------------------------------------
+
+def lu(a):
+    # LU decomposition with partial pivoting: PA = LU -> [P, L, U].
+    if a.rank() != 2 or a.shape[0] != a.shape[1]:
+        raise ValueError("LU decomposition requires a square 2D matrix")
+    n = a.shape[0]
+    u = a.clone()
+    l = _eye(n)
+    p = _eye(n)
+    piv = []
+    for i in range(n):
+        piv.append(i)
+
+    for k in range(n - 1):
+        max_row = k
+        max_val = _abs(u.get([k, k]))
+        for i in range(k + 1, n):
+            val = _abs(u.get([i, k]))
+            if val > max_val:
+                max_val = val
+                max_row = i
+        if max_row != k:
+            for j in range(n):
+                tmp = u.get([k, j])
+                u.set([k, j], u.get([max_row, j]))
+                u.set([max_row, j], tmp)
+                tmp = p.get([k, j])
+                p.set([k, j], p.get([max_row, j]))
+                p.set([max_row, j], tmp)
+            for j in range(k):
+                tmp = l.get([k, j])
+                l.set([k, j], l.get([max_row, j]))
+                l.set([max_row, j], tmp)
+            tmp = piv[k]
+            piv[k] = piv[max_row]
+            piv[max_row] = tmp
+
+        pivot = u.get([k, k])
+        if _abs(pivot) < 1e-15:
+            continue
+        for i in range(k + 1, n):
+            factor = u.get([i, k]) / pivot
+            l.set([i, k], factor)
+            u.set([i, k], 0.0)
+            for j in range(k + 1, n):
+                cur = u.get([i, j])
+                u.set([i, j], cur - factor * u.get([k, j]))
+    return [p, l, u]
+
+def qr(a):
+    # QR decomposition via Householder reflections: A = QR -> [Q, R].
+    if a.rank() != 2:
+        raise ValueError("QR decomposition requires a 2D matrix")
+    m = a.shape[0]
+    n = a.shape[1]
+    q = _eye(m)
+    r = a.clone()
+    k_limit = m
+    if n < k_limit:
+        k_limit = n
+    for k in range(k_limit):
+        norm_x2 = 0.0
+        for i in range(k, m):
+            v = r.get([i, k])
+            norm_x2 = norm_x2 + v * v
+        norm_x = _sqrt(norm_x2)
+        if norm_x < 1e-15:
+            continue
+        if r.get([k, k]) >= 0.0:
+            alpha = -norm_x
+        else:
+            alpha = norm_x
+        u1 = r.get([k, k]) - alpha
+        v = []
+        for i in range(m - k):
+            v.append(0.0)
+        v[0] = 1.0
+        for i in range(k + 1, m):
+            v[i - k] = r.get([i, k]) / u1
+        beta = -u1 / alpha
+        for j in range(k, n):
+            dot = 0.0
+            for i in range(k, m):
+                dot = dot + v[i - k] * r.get([i, j])
+            factor = beta * dot
+            for i in range(k, m):
+                cur = r.get([i, j])
+                r.set([i, j], cur - factor * v[i - k])
+        for i in range(m):
+            dot = 0.0
+            for j in range(k, m):
+                dot = dot + q.get([i, j]) * v[j - k]
+            factor = beta * dot
+            for j in range(k, m):
+                cur = q.get([i, j])
+                q.set([i, j], cur - factor * v[j - k])
+    return [q, r]
+
+def cholesky(a):
+    # Cholesky decomposition of SPD matrix: A = L * L^T.
+    if a.rank() != 2 or a.shape[0] != a.shape[1]:
+        raise ValueError("Cholesky decomposition requires a square symmetric matrix")
+    n = a.shape[0]
+    l = _zeros([n, n])
+    for i in range(n):
+        for j in range(i + 1):
+            sum_v = 0.0
+            for k in range(j):
+                sum_v = sum_v + l.get([i, k]) * l.get([j, k])
+            if i == j:
+                diag = a.get([i, i]) - sum_v
+                if diag <= 0.0:
+                    raise ValueError("Matrix is not positive definite")
+                l.set([i, j], _sqrt(diag))
+            else:
+                l.set([i, j], (a.get([i, j]) - sum_v) / l.get([j, j]))
+    return l
+
+def solve(a, b):
+    # Solves linear system Ax = b via LU (forward + back substitution).
+    p, l, u = lu(a)
+    n = a.shape[0]
+    is_1d = b.rank() == 1
+    if is_1d:
+        b2 = b.reshape([n, 1])
+    else:
+        b2 = b
+    pb = matmul(p, b2)
+    y = _zeros([n, 1])
+    for i in range(n):
+        sum_v = 0.0
+        for j in range(i):
+            sum_v = sum_v + l.get([i, j]) * y.get([j, 0])
+        y.set([i, 0], pb.get([i, 0]) - sum_v)
+    x = _zeros([n, 1])
+    for i in range(n - 1, -1, -1):
+        sum_v = 0.0
+        for j in range(i + 1, n):
+            sum_v = sum_v + u.get([i, j]) * x.get([j, 0])
+        x.set([i, 0], (y.get([i, 0]) - sum_v) / u.get([i, i]))
+    if is_1d:
+        return x.reshape([n])
+    return x
+
+def inverse(a):
+    # Matrix inverse A^-1 via LU against unit columns.
+    if a.rank() != 2 or a.shape[0] != a.shape[1]:
+        raise ValueError("Matrix inverse requires a square 2D matrix")
+    n = a.shape[0]
+    p, l, u = lu(a)
+    inv = _zeros([n, n])
+    for col in range(n):
+        e_col = _zeros([n, 1])
+        for i in range(n):
+            e_col.set([i, 0], p.get([i, col]))
+        y = _zeros([n, 1])
+        for i in range(n):
+            sum_v = 0.0
+            for j in range(i):
+                sum_v = sum_v + l.get([i, j]) * y.get([j, 0])
+            y.set([i, 0], e_col.get([i, 0]) - sum_v)
+        for i in range(n - 1, -1, -1):
+            sum_v = 0.0
+            for j in range(i + 1, n):
+                sum_v = sum_v + u.get([i, j]) * inv.get([j, col])
+            inv.set([i, col], (y.get([i, 0]) - sum_v) / u.get([i, i]))
+    return inv
+
+def det(a):
+    # Determinant via LU with permutation parity correction.
+    if a.rank() != 2 or a.shape[0] != a.shape[1]:
+        raise ValueError("Determinant requires a square 2D matrix")
+    p, l, u = lu(a)
+    n = a.shape[0]
+    det_v = 1.0
+    for i in range(n):
+        det_v = det_v * u.get([i, i])
+    swaps = 0
+    visited = []
+    for i in range(n):
+        visited.append(False)
+    for i in range(n):
+        if visited[i]:
+            continue
+        length = 0
+        curr = i
+        while not visited[curr]:
+            visited[curr] = True
+            nxt = 0
+            for j in range(n):
+                if p.get([curr, j]) == 1.0:
+                    nxt = j
+                    break
+            curr = nxt
+            length = length + 1
+        if length > 0:
+            swaps = swaps + length - 1
+    if swaps % 2 == 1:
+        return -det_v
+    return det_v
+
+def trace(a):
+    # Sum of diagonal elements of a 2D matrix.
+    if a.rank() != 2:
+        raise ValueError("Trace requires a 2D matrix")
+    min_dim = a.shape[0]
+    if a.shape[1] < min_dim:
+        min_dim = a.shape[1]
+    sum_v = 0.0
+    for i in range(min_dim):
+        sum_v = sum_v + a.get([i, i])
+    return sum_v
+
+def schur(a, max_iter=300):
+    # Real Schur decomposition A = Q * T * Q^T (Hessenberg + shifted QR).
+    if a.rank() != 2 or a.shape[0] != a.shape[1]:
+        raise ValueError("Schur decomposition requires a square 2D matrix")
+    n = a.shape[0]
+    if n == 1:
+        return [_eye(1), a.clone()]
+
+    h, q = _reduce_to_hessenberg(a)
+    eps = 1e-14
+    it = 0
+    m = n
+    while m > 1 and it < max_iter:
+        it = it + 1
+        l = m - 1
+        while l > 0:
+            if _abs(h.get([l, l - 1])) <= eps * (_abs(h.get([l - 1, l - 1])) + _abs(h.get([l, l]))):
+                h.set([l, l - 1], 0.0)
+                break
+            l = l - 1
+        if l == m - 1:
+            m = m - 1
+            continue
+        if l == m - 2:
+            m = m - 2
+            continue
+        a11 = h.get([m - 2, m - 2])
+        a12 = h.get([m - 2, m - 1])
+        a21 = h.get([m - 1, m - 2])
+        a22 = h.get([m - 1, m - 1])
+        tr = a11 + a22
+        det_v = a11 * a22 - a12 * a21
+        disc = tr * tr - 4.0 * det_v
+        if disc >= 0.0:
+            sqrt_disc = _sqrt(disc)
+            s1 = (tr + sqrt_disc) * 0.5
+            s2 = (tr - sqrt_disc) * 0.5
+            if _abs(s1 - a22) < _abs(s2 - a22):
+                shift = s1
+            else:
+                shift = s2
+        else:
+            shift = tr * 0.5
+
+        sub_dim = m - l
+        sub_h = _zeros([sub_dim, sub_dim])
+        for r in range(sub_dim):
+            for c in range(sub_dim):
+                val = h.get([l + r, l + c])
+                if r == c:
+                    val = val - shift
+                sub_h.set([r, c], val)
+        sub_q, sub_r = qr(sub_h)
+        sub_h_next = matmul(sub_r, sub_q)
+        for r in range(sub_dim):
+            for c in range(sub_dim):
+                val = sub_h_next.get([r, c])
+                if r == c:
+                    val = val + shift
+                h.set([l + r, l + c], val)
+
+        q_sub = _zeros([n, sub_dim])
+        for r in range(n):
+            for c in range(sub_dim):
+                sum_v = 0.0
+                for k2 in range(sub_dim):
+                    sum_v = sum_v + q.get([r, l + k2]) * sub_q.get([k2, c])
+                q_sub.set([r, c], sum_v)
+        for r in range(n):
+            for c in range(sub_dim):
+                q.set([r, l + c], q_sub.get([r, c]))
+
+    for i in range(2, n):
+        for j in range(i - 1):
+            h.set([i, j], 0.0)
+    return [q, h]
+
+def _reduce_to_hessenberg(a):
+    n = a.shape[0]
+    h = a.clone()
+    q = _eye(n)
+    for k in range(n - 2):
+        m = n - k - 1
+        norm_x2 = 0.0
+        for i in range(k + 1, n):
+            v = h.get([i, k])
+            norm_x2 = norm_x2 + v * v
+        norm_x = _sqrt(norm_x2)
+        if norm_x < 1e-15:
+            continue
+        if h.get([k + 1, k]) >= 0.0:
+            alpha = -norm_x
+        else:
+            alpha = norm_x
+        u1 = h.get([k + 1, k]) - alpha
+        v = []
+        for i in range(m):
+            v.append(0.0)
+        v[0] = 1.0
+        for i in range(1, m):
+            v[i] = h.get([k + 1 + i, k]) / u1
+        beta = -u1 / alpha
+        for j in range(k, n):
+            dot = 0.0
+            for i in range(m):
+                dot = dot + v[i] * h.get([k + 1 + i, j])
+            factor = beta * dot
+            for i in range(m):
+                cur = h.get([k + 1 + i, j])
+                h.set([k + 1 + i, j], cur - factor * v[i])
+        for i in range(n):
+            dot = 0.0
+            for j in range(m):
+                dot = dot + v[j] * h.get([i, k + 1 + j])
+            factor = beta * dot
+            for j in range(m):
+                cur = h.get([i, k + 1 + j])
+                h.set([i, k + 1 + j], cur - factor * v[j])
+        for i in range(n):
+            dot = 0.0
+            for j in range(m):
+                dot = dot + q.get([i, k + 1 + j]) * v[j]
+            factor = beta * dot
+            for j in range(m):
+                cur = q.get([i, k + 1 + j])
+                q.set([i, k + 1 + j], cur - factor * v[j])
+    return h, q
+
+def solve_sylvester(a, b, c):
+    # Solves A*X + X*B = C via the Kronecker system (I_n⊗A + B^T⊗I_m)vec(X)=vec(C).
+    if a.rank() != 2 or a.shape[0] != a.shape[1]:
+        raise ValueError("Matrix A must be square")
+    if b.rank() != 2 or b.shape[0] != b.shape[1]:
+        raise ValueError("Matrix B must be square")
+    m = a.shape[0]
+    n = b.shape[0]
+    mn = m * n
+    in_mat = _eye(n)
+    im_mat = _eye(m)
+    b_t = b.matrix_transpose()
+    in_kron_a = kron(in_mat, a)
+    bt_kron_im = kron(b_t, im_mat)
+    m_mat = _mat_add(in_kron_a, bt_kron_im)
+    vec_c = _zeros([mn, 1])
+    for col in range(n):
+        for row in range(m):
+            vec_c.set([col * m + row, 0], c.get([row, col]))
+    vec_x = solve(m_mat, vec_c)
+    x = _zeros([m, n])
+    for col in range(n):
+        for row in range(m):
+            x.set([row, col], vec_x.get([col * m + row, 0]))
+    return x
+
+def _mat_add(a, b):
+    result = _zeros(a.shape)
+    for i in range(result.total_length):
+        result.buffer.data[result.offset + i] = a.buffer.data[a.offset + i] + b.buffer.data[b.offset + i]
+    return result
+
+# ---------------------------------------------------------------------------
+# EinSum  (LinAlg/EinSum.cs)
+# ---------------------------------------------------------------------------
+
+def einsum(subscripts, operands):
+    # Einstein summation: "ij,jk->ik", "bij,bjk->bik", "ii->", "ij->ji".
+    # `operands` is a list of NDArrays.
+    s = _replace_spaces(subscripts)
+    parts = _split_arrow(s)
+    input_terms = _split_comma(parts[0])
+    if len(input_terms) != len(operands):
+        raise ValueError("Number of subscripts terms does not match number of operands")
+
+    label_dims = []
+    label_sizes = []
+    for op_idx in range(len(operands)):
+        term = input_terms[op_idx]
+        op = operands[op_idx]
+        if len(term) != op.rank():
+            raise ValueError("Subscript term length does not match operand rank")
+        for d in range(len(term)):
+            label = term[d]
+            size = op.shape[d]
+            found = False
+            for li in range(len(label_dims)):
+                if label_dims[li] == label:
+                    if label_sizes[li] != size:
+                        raise ValueError("Dimension mismatch for label")
+                    found = True
+                    break
+            if not found:
+                label_dims.append(label)
+                label_sizes.append(size)
+
+    if len(parts) > 1:
+        output_term = parts[1]
+    else:
+        # NumPy default: labels appearing exactly once, sorted alphabetically.
+        labels_once = []
+        for li in range(len(label_dims)):
+            count = 0
+            for term in input_terms:
+                for ch in term:
+                    if ch == label_dims[li]:
+                        count = count + 1
+            if count == 1:
+                labels_once.append(label_dims[li])
+        labels_once = _sort_chars(labels_once)
+        output_term = _join_chars(labels_once)
+
+    out_shape = []
+    for ch in output_term:
+        for li in range(len(label_dims)):
+            if label_dims[li] == ch:
+                out_shape.append(label_sizes[li])
+                break
+    result = _zeros(out_shape)
+
+    contracted_labels = []
+    contracted_sizes = []
+    for li in range(len(label_dims)):
+        in_out = False
+        for ch in output_term:
+            if label_dims[li] == ch:
+                in_out = True
+                break
+        if not in_out:
+            contracted_labels.append(label_dims[li])
+            contracted_sizes.append(label_sizes[li])
+    num_contracted = shape_total_length(contracted_sizes)
+    out_total = result.total_length
+
+    for out_idx in range(out_total):
+        out_coords = get_multi_index(out_idx, out_shape)
+        sum_v = 0.0
+        for c_idx in range(num_contracted):
+            c_coords = get_multi_index(c_idx, contracted_sizes)
+            prod = 1.0
+            for op_idx in range(len(operands)):
+                term = input_terms[op_idx]
+                op = operands[op_idx]
+                prod = prod * _einsum_op_value(op, term, out_coords, output_term, c_coords, contracted_labels)
+            sum_v = sum_v + prod
+        _einsum_set(result, out_coords, sum_v)
+    return result
+
+def _einsum_op_value(op, term, out_coords, output_term, c_coords, contracted_labels):
+    coords = []
+    for d in range(len(term)):
+        ch = term[d]
+        val = None
+        for i in range(len(output_term)):
+            if output_term[i] == ch:
+                val = out_coords[i]
+                break
+        if val is None:
+            for i in range(len(contracted_labels)):
+                if contracted_labels[i] == ch:
+                    val = c_coords[i]
+                    break
+        coords.append(val)
+    return op.get(coords)
+
+def _einsum_set(result, out_coords, value):
+    result.set(out_coords, value)
+
+def _replace_spaces(s):
+    out = ""
+    for ch in s:
+        if ch != " ":
+            out = out + ch
+    return out
+
+def _split_arrow(s):
+    for i in range(len(s) - 1):
+        if s[i] == "-" and s[i + 1] == ">":
+            return [s[0:i], s[i + 2:len(s)]]
+    return [s]
+
+def _split_comma(s):
+    parts = []
+    current = ""
+    for ch in s:
+        if ch == ",":
+            parts.append(current)
+            current = ""
+        else:
+            current = current + ch
+    parts.append(current)
+    return parts
+
+def _sort_chars(chars):
+    arr = []
+    for ch in chars:
+        arr.append(ch)
+    for i in range(len(arr)):
+        for j in range(i + 1, len(arr)):
+            if arr[j] < arr[i]:
+                tmp = arr[i]
+                arr[i] = arr[j]
+                arr[j] = tmp
+    return arr
+
+def _join_chars(chars):
+    out = ""
+    for ch in chars:
+        out = out + ch
+    return out
+
+# ---------------------------------------------------------------------------
+# Eigen  (LinAlg/Eigen.cs)
+# ---------------------------------------------------------------------------
+
+def eigh(a):
+    # Jacobi eigenvalue algorithm for symmetric matrices: A*v_i = lambda_i*v_i.
+    # Returns [eigenvalues (1D), eigenvector matrix V (column i = vector i)].
+    if a.rank() != 2 or a.shape[0] != a.shape[1]:
+        raise ValueError("Eigh requires a square 2D matrix")
+    n = a.shape[0]
+    d = a.clone()
+    v = _eye(n)
+    eps = 1e-15
+    max_iterations = 100
+
+    for iteration in range(max_iterations):
+        max_off_diag = 0.0
+        p = 0
+        q = 1
+        for i in range(n - 1):
+            for j in range(i + 1, n):
+                val = _abs(d.get([i, j]))
+                if val > max_off_diag:
+                    max_off_diag = val
+                    p = i
+                    q = j
+        if max_off_diag < eps:
+            break
+
+        d_pp = d.get([p, p])
+        d_qq = d.get([q, q])
+        d_pq = d.get([p, q])
+        theta = (d_qq - d_pp) / (2.0 * d_pq)
+        if theta >= 0.0:
+            sign = 1.0
+        else:
+            sign = -1.0
+        t = sign / (_abs(theta) + _sqrt(1.0 + theta * theta))
+        c = 1.0 / _sqrt(1.0 + t * t)
+        s = t * c
+        tau = s / (1.0 + c)
+
+        d.set([p, p], d_pp - t * d_pq)
+        d.set([q, q], d_qq + t * d_pq)
+        d.set([p, q], 0.0)
+        d.set([q, p], 0.0)
+
+        for k in range(n):
+            if k != p and k != q:
+                d_kp = d.get([k, p])
+                d_kq = d.get([k, q])
+                d.set([k, p], d_kp - s * (d_kq + tau * d_kp))
+                d.set([p, k], d.get([k, p]))
+                d.set([k, q], d_kq + s * (d_kp - tau * d_kq))
+                d.set([q, k], d.get([k, q]))
+
+        for k in range(n):
+            v_kp = v.get([k, p])
+            v_kq = v.get([k, q])
+            v.set([k, p], c * v_kp - s * v_kq)
+            v.set([k, q], s * v_kp + c * v_kq)
+
+    eigvals = _zeros([n])
+    for i in range(n):
+        eigvals.set([i], d.get([i, i]))
+    order = []
+    for i in range(n):
+        order.append(i)
+    order = _sort_by_eigval(order, eigvals)
+    sorted_eigvals = _zeros([n])
+    sorted_v = _zeros([n, n])
+    for j in range(n):
+        src_idx = order[j]
+        sorted_eigvals.set([j], eigvals.get([src_idx]))
+        for i in range(n):
+            sorted_v.set([i, j], v.get([i, src_idx]))
+    return [sorted_eigvals, sorted_v]
+
+def _sort_by_eigval(order, eigvals):
+    # Insertion sort ascending by eigenvalue (mirrors Array.Sort ordering).
+    for i in range(1, len(order)):
+        key = order[i]
+        j = i - 1
+        while j >= 0 and eigvals.get([order[j]]) > eigvals.get([key]):
+            order[j + 1] = order[j]
+            j = j - 1
+        order[j + 1] = key
+    return order
+
+# ---------------------------------------------------------------------------
+# SVD  (LinAlg/SVD.cs)
+# ---------------------------------------------------------------------------
+
+def svd(a):
+    # Singular Value Decomposition A = U * diag(S) * V^T -> [U, S, Vt].
+    if a.rank() != 2:
+        raise ValueError("SVD requires a 2D matrix")
+    m = a.shape[0]
+    n = a.shape[1]
+    if m >= n:
+        return _one_sided_jacobi(a, m, n)
+    a_t = a.matrix_transpose()
+    v, s, u_t = _one_sided_jacobi(a_t, n, m)
+    return [u_t.matrix_transpose(), s, v.matrix_transpose()]
+
+def _one_sided_jacobi(a, m, n):
+    b = a.clone()
+    v = _eye(n)
+    eps = 1e-15
+    max_sweeps = 100
+
+    for sweep in range(max_sweeps):
+        max_gamma = 0.0
+        for j in range(n - 1):
+            for k in range(j + 1, n):
+                alpha = 0.0
+                beta = 0.0
+                gamma = 0.0
+                for i in range(m):
+                    bj = b.get([i, j])
+                    bk = b.get([i, k])
+                    alpha = alpha + bj * bj
+                    beta = beta + bk * bk
+                    gamma = gamma + bj * bk
+                if _abs(gamma) > max_gamma:
+                    max_gamma = _abs(gamma)
+                if _abs(gamma) < eps * _sqrt(alpha * beta + eps):
+                    continue
+                zeta = (beta - alpha) / (2.0 * gamma)
+                if zeta >= 0.0:
+                    sign = 1.0
+                else:
+                    sign = -1.0
+                t = sign / (_abs(zeta) + _sqrt(1.0 + zeta * zeta))
+                c = 1.0 / _sqrt(1.0 + t * t)
+                s = c * t
+                for i in range(m):
+                    bj = b.get([i, j])
+                    bk = b.get([i, k])
+                    b.set([i, j], c * bj - s * bk)
+                    b.set([i, k], s * bj + c * bk)
+                for i in range(n):
+                    vj = v.get([i, j])
+                    vk = v.get([i, k])
+                    v.set([i, j], c * vj - s * vk)
+                    v.set([i, k], s * vj + c * vk)
+        if max_gamma < eps:
+            break
+
+    s_vec = _zeros([n])
+    u = _zeros([m, n])
+    for j in range(n):
+        norm_sq = 0.0
+        for i in range(m):
+            v2 = b.get([i, j])
+            norm_sq = norm_sq + v2 * v2
+        sigma = _sqrt(norm_sq)
+        s_vec.set([j], sigma)
+        if sigma > eps:
+            for i in range(m):
+                u.set([i, j], b.get([i, j]) / sigma)
+        else:
+            for i in range(m):
+                u.set([i, j], 0.0)
+
+    order = []
+    for i in range(n):
+        order.append(i)
+    order = _sort_by_sval_desc(order, s_vec)
+    sorted_s = _zeros([n])
+    sorted_u = _zeros([m, n])
+    sorted_v = _zeros([n, n])
+    for j in range(n):
+        src_idx = order[j]
+        sorted_s.set([j], s_vec.get([src_idx]))
+        for i in range(m):
+            sorted_u.set([i, j], u.get([i, src_idx]))
+        for i in range(n):
+            sorted_v.set([i, j], v.get([i, src_idx]))
+    return [sorted_u, sorted_s, sorted_v.matrix_transpose()]
+
+def _sort_by_sval_desc(order, s_vec):
+    # Insertion sort descending by singular value.
+    for i in range(1, len(order)):
+        key = order[i]
+        j = i - 1
+        while j >= 0 and s_vec.get([order[j]]) < s_vec.get([key]):
+            order[j + 1] = order[j]
+            j = j - 1
+        order[j + 1] = key
+    return order

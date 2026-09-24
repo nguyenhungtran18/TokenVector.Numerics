@@ -1,0 +1,436 @@
+# Copyright (c) TokenVector Project. All rights reserved.
+# Licensed under the MIT License.
+#
+# TV-1001: TokenVector (`.tkv`) translation of the **IO** module.
+# Source of truth (C# reference implementations, 1:1 sections):
+#   IO/TensorIO.cs            -> NumPy .npy v1.0 writer/reader (magic
+#       \x93NUMPY, version 1.0, 64-byte aligned header), raw binary
+#       (rank + shape + payload), CSV export
+#   IO/TensorArchiveAndMemMap.cs -> .npz multi-tensor ZIP archive and
+#       MemoryMappedNDArray (out-of-core zero-RAM disk-backed tensor)
+#
+# Fidelity notes:
+#   - TokenVector exposes stream-style primitives (open_file / read_bytes /
+#       write_bytes) from the runtime `io` builtin namespace; file I/O keeps
+#       the exact .npy v1.0 on-disk layout, including the 64-byte alignment
+#       padding of the header dictionary.
+#   - Endianness: little-endian '<f8' etc., matching the C# x86_64 layout.
+
+import tv
+from tv.core import NDArray, row_major_strides, shape_total_length
+
+_NPY_MAGIC = [0x93, 0x4E, 0x55, 0x4D, 0x50, 0x59]  # \x93 'N' 'U' 'M' 'P' 'Y'
+
+# TV-1001 note: dtype tables are parallel arrays (dict-free), indexed by the
+# order in _DTYPE_ORDER.
+_DTYPE_ORDER = ["f32", "f64", "i32", "i64", "i16", "u8"]
+_DTYPE_DESCRIPTORS = ["<f4", "<f8", "<i4", "<i8", "<i2", "|u1"]
+
+def _dtype_element_size(dtype):
+    # TV-1001 replacement for dict lookups: element size in bytes, default 8.
+    if dtype == "f32":
+        return 4
+    if dtype == "i32":
+        return 4
+    if dtype == "i16":
+        return 2
+    if dtype == "u8":
+        return 1
+    return 8
+
+# ---------------------------------------------------------------------------
+# NumPy .npy format I/O  (IO/TensorIO.cs)
+# ---------------------------------------------------------------------------
+
+def _shape_string(shape):
+    # (2, 3) for 2D; (5,) for 1D; () for 0-dim scalar.
+    if len(shape) == 1:
+        return "(" + str(shape[0]) + ",)"
+    parts = ""
+    for i in range(len(shape)):
+        if i > 0:
+            parts = parts + ", "
+        parts = parts + str(shape[i])
+    return "(" + parts + ")"
+
+def _build_header(tensor):
+    descr = "<f8"
+    if tensor.dtype == "f32":
+        descr = "<f4"
+    elif tensor.dtype == "i32":
+        descr = "<i4"
+    elif tensor.dtype == "i64":
+        descr = "<i8"
+    elif tensor.dtype == "i16":
+        descr = "<i2"
+    elif tensor.dtype == "u8":
+        descr = "|u1"
+    dict_str = "{'descr': '" + descr + "', 'fortran_order': False, 'shape': " + _shape_string(tensor.shape) + ", }"
+    dict_len = len(dict_str)
+    total_pre_header = 10  # 6 magic + 1 major + 1 minor + 2 header_len
+    header_len = dict_len + 1  # + newline
+    pad = (64 - ((total_pre_header + header_len) % 64)) % 64
+    header_len = header_len + pad
+    padded = dict_str
+    for i in range(pad):
+        padded = padded + " "
+    padded = padded + "\n"
+    return padded, header_len
+
+def save_npy(file_path, tensor):
+    # Saves tensor in NumPy .npy v1.0 binary format.
+    contig = tensor.contiguous()
+    header, _header_len = _build_header(tensor)
+    out = []
+    for b in _NPY_MAGIC:
+        out.append(b)
+    out.append(1)   # major version
+    out.append(0)   # minor version
+    header_bytes = _string_to_ascii_bytes(header)
+    # header length as little-endian unsigned short
+    hb_len = len(header_bytes)
+    out.append(hb_len % 256)
+    out.append(hb_len // 256)
+    for b in header_bytes:
+        out.append(b)
+    # raw little-endian payload
+    data = _tensor_to_le_bytes(contig)
+    for b in data:
+        out.append(b)
+    tv.io.write_file_bytes(file_path, out)
+    return file_path
+
+def load_npy(file_path):
+    # Loads tensor from NumPy .npy binary file.
+    raw = tv.io.read_file_bytes(file_path)
+    if len(raw) < 10:
+        raise ValueError("Invalid .npy file: too short")
+    for i in range(6):
+        if raw[i] != _NPY_MAGIC[i]:
+            raise ValueError("Invalid .npy file: magic header mismatch")
+    major = raw[6]
+    minor = raw[7]
+    if major == 1:
+        header_len = raw[8] + raw[9] * 256
+    else:
+        header_len = raw[8] + raw[9] * 256 + raw[10] * 65536 + raw[11] * 16777216
+    offset = 10
+    header_chars = []
+    for i in range(header_len):
+        header_chars.append(chr(raw[offset + i]))
+    header_str = "".join(header_chars)
+    offset = offset + header_len
+    shape = _parse_npy_shape(header_str)
+    descr = _parse_npy_descr(header_str)
+    dtype = _descr_to_dtype(descr)
+    total = 1
+    for d in range(len(shape)):
+        total = total * shape[d]
+    result = NDArray(shape, dtype=dtype)
+    elem_size = _dtype_element_size(dtype)
+    byte_count = total * elem_size
+    if len(raw) - offset < byte_count:
+        raise ValueError("Unexpected end of file while reading tensor data")
+    _le_bytes_to_tensor(result, raw, offset, total)
+    return result
+
+def _descr_to_dtype(descr):
+    # TV-1001 replacement for dict.items(): parallel key/value arrays.
+    for i in range(len(_DTYPE_ORDER)):
+        if _DTYPE_DESCRIPTORS[i] == descr:
+            return _DTYPE_ORDER[i]
+    return "f64"
+
+def _string_to_ascii_bytes(s):
+    out = []
+    for ch in s:
+        out.append(ord(ch) % 256)
+    return out
+
+def _parse_npy_shape(header):
+    # Parses "'shape': (2, 3)," from a .npy header dictionary.
+    shape_idx = _find_substring(header, "'shape':")
+    if shape_idx < 0:
+        raise ValueError("Shape descriptor not found in .npy header")
+    open_paren = _find_char_from(header, "(", shape_idx)
+    close_paren = _find_char_from(header, ")", open_paren)
+    content = header[open_paren + 1:close_paren]
+    content = _trim(content)
+    if len(content) == 0:
+        return []
+    tokens = _split_trim(content, ",")
+    shape = []
+    for i in range(len(tokens)):
+        if len(tokens[i]) > 0:
+            shape.append(int(tokens[i]))
+    return shape
+
+def _parse_npy_descr(header):
+    idx = _find_substring(header, "'descr':")
+    if idx < 0:
+        return "<f8"
+    quote1 = _find_char_from(header, "'", idx + 8)
+    quote2 = _find_char_from(header, "'", quote1 + 1)
+    return header[quote1 + 1:quote2]
+
+def _find_substring(s, sub):
+    for i in range(len(s) - len(sub) + 1):
+        if s[i:i + len(sub)] == sub:
+            return i
+    return -1
+
+def _find_char_from(s, ch, start):
+    for i in range(start, len(s)):
+        if s[i] == ch:
+            return i
+    return -1
+
+def _trim(s):
+    start = 0
+    end = len(s)
+    while start < end and s[start] == " ":
+        start = start + 1
+    while end > start and s[end - 1] == " ":
+        end = end - 1
+    return s[start:end]
+
+def _split_trim(s, sep):
+    parts = []
+    current = ""
+    for ch in s:
+        if ch == sep:
+            parts.append(_trim(current))
+            current = ""
+        else:
+            current = current + ch
+    parts.append(_trim(current))
+    return parts
+
+def _tensor_to_le_bytes(tensor):
+    # IEEE-754 little-endian encoding of the contiguous buffer.
+    out = []
+    elem_size = _dtype_element_size(tensor.dtype)
+    for i in range(tensor.total_length):
+        v = tensor.buffer.data[tensor.offset + i]
+        out.extend(_double_to_le_bytes(v, elem_size))
+    return out
+
+def _double_to_le_bytes(v, size):
+    # Encode via integer reinterpretation of the IEEE-754 bit pattern.
+    if size == 4:
+        bits = tv.f32_bits(v)
+    else:
+        bits = tv.f64_bits(v)
+    out = []
+    for b in range(size):
+        out.append((bits >> (8 * b)) % 256)
+    return out
+
+def _le_bytes_to_tensor(tensor, raw, offset, total):
+    elem_size = _dtype_element_size(tensor.dtype)
+    for i in range(total):
+        bits = 0
+        for b in range(elem_size):
+            bits = bits + raw[offset + i * elem_size + b] * (256 ** b)
+        if elem_size == 4:
+            v = tv.f32_from_bits(bits)
+        else:
+            v = tv.f64_from_bits(bits)
+        tensor.buffer.data[tensor.offset + i] = v
+
+# ---------------------------------------------------------------------------
+# Raw binary I/O  (IO/TensorIO.cs #region Raw Binary I/O)
+# ---------------------------------------------------------------------------
+
+def save_binary(file_path, tensor):
+    # Custom raw format: [rank:i32][shape:i32...][payload LE].
+    contig = tensor.contiguous()
+    out = []
+    out.extend(_int32_to_le(tensor.rank()))
+    for d in range(tensor.rank()):
+        out.extend(_int32_to_le(tensor.shape[d]))
+    out.extend(_tensor_to_le_bytes(contig))
+    tv.io.write_file_bytes(file_path, out)
+    return file_path
+
+def load_binary(file_path):
+    raw = tv.io.read_file_bytes(file_path)
+    rank = _le_to_int32(raw, 0)
+    shape = []
+    for d in range(rank):
+        shape.append(_le_to_int32(raw, 4 + 4 * d))
+    result = NDArray(shape)
+    offset = 4 + 4 * rank
+    total = result.total_length
+    _le_bytes_to_tensor(result, raw, offset, total)
+    return result
+
+def _int32_to_le(v):
+    return [v % 256, (v >> 8) % 256, (v >> 16) % 256, (v >> 24) % 256]
+
+def _le_to_int32(raw, offset):
+    v = raw[offset] + raw[offset + 1] * 256 + raw[offset + 2] * 65536 + raw[offset + 3] * 16777216
+    if v >= 2147483648:
+        v = v - 4294967296
+    return v
+
+# ---------------------------------------------------------------------------
+# CSV I/O  (IO/TensorIO.cs #region CSV I/O)
+# ---------------------------------------------------------------------------
+
+def save_csv(file_path, tensor, delimiter=","):
+    # Writes a 2D tensor as delimited text.
+    if tensor.rank() != 2:
+        raise ValueError("SaveCsv requires a 2D matrix")
+    rows = tensor.shape[0]
+    cols = tensor.shape[1]
+    lines = []
+    for r in range(rows):
+        line = ""
+        for c in range(cols):
+            if c > 0:
+                line = line + delimiter
+            line = line + str(tensor.get([r, c]))
+        lines.append(line)
+    tv.io.write_file_text(file_path, "\n".join(lines) + "\n")
+    return file_path
+
+# ---------------------------------------------------------------------------
+# NPZ archive  (IO/TensorArchiveAndMemMap.cs)
+# ---------------------------------------------------------------------------
+
+def save_npz(file_path, named_tensors, compress=True):
+    # Saves multiple named tensors into a .npz ZIP archive
+    # (each entry is a complete .npy file). TV-1001 note: a dict of named
+    # tensors is represented as parallel lists (names + tensors).
+    names = []
+    tensors = []
+    for i in range(len(named_tensors)):
+        names.append(named_tensors[2 * i])
+        tensors.append(named_tensors[2 * i + 1])
+    entries = []
+    entry_names = []
+    for idx in range(len(names)):
+        name = names[idx]
+        entry_name = name
+        if not _ends_with(name, ".npy"):
+            entry_name = name + ".npy"
+        tensor = tensors[idx]
+        header, _hl = _build_header(tensor)
+        contig = tensor.contiguous()
+        payload = []
+        for b in _NPY_MAGIC:
+            payload.append(b)
+        payload.append(1)
+        payload.append(0)
+        header_bytes = _string_to_ascii_bytes(header)
+        payload.append(len(header_bytes) % 256)
+        payload.append(len(header_bytes) // 256)
+        for b in header_bytes:
+            payload.append(b)
+        payload.extend(_tensor_to_le_bytes(contig))
+        entry_names.append(entry_name)
+        entries.append(payload)
+    tv.io.write_zip_archive(file_path, entry_names, entries, compress)
+    return file_path
+
+def load_npz(file_path):
+    # Loads all .npy entries from a .npz archive -> parallel lists of
+    # (names, tensors), the TV-1001 representation of a name -> tensor dict.
+    entry_names, raw_entries = tv.io.read_zip_archive(file_path)
+    result_names = []
+    result_tensors = []
+    for i in range(len(entry_names)):
+        name = entry_names[i]
+        if not _ends_with(name, ".npy"):
+            continue
+        key = name[0:len(name) - 4]
+        tensor = _load_npy_from_bytes(raw_entries[i])
+        result_names.append(key)
+        result_tensors.append(tensor)
+    result = []
+    for i in range(len(result_names)):
+        result.append(result_names[i])
+        result.append(result_tensors[i])
+    return result
+
+def _ends_with(s, suffix):
+    if len(s) < len(suffix):
+        return False
+    return s[len(s) - len(suffix):len(s)] == suffix
+
+def _load_npy_from_bytes(raw):
+    # Same reader as load_npy but from an in-memory byte list.
+    if len(raw) < 10:
+        raise ValueError("Invalid .npy payload")
+    for i in range(6):
+        if raw[i] != _NPY_MAGIC[i]:
+            raise ValueError("Invalid .npy payload: magic mismatch")
+    major = raw[6]
+    if major == 1:
+        header_len = raw[8] + raw[9] * 256
+        offset = 10
+    else:
+        header_len = raw[8] + raw[9] * 256 + raw[10] * 65536 + raw[11] * 16777216
+        offset = 12
+    header_chars = []
+    for i in range(header_len):
+        header_chars.append(chr(raw[offset + i]))
+    header_str = "".join(header_chars)
+    offset = offset + header_len
+    shape = _parse_npy_shape(header_str)
+    descr = _parse_npy_descr(header_str)
+    dtype = _descr_to_dtype(descr)
+    result = NDArray(shape, dtype=dtype)
+    total = result.total_length
+    _le_bytes_to_tensor(result, raw, offset, total)
+    return result
+
+# ---------------------------------------------------------------------------
+# Memory-mapped out-of-core tensor  (MemoryMappedNDArray)
+# ---------------------------------------------------------------------------
+
+class MemoryMappedNDArray:
+    # Disk-backed tensor with on-demand paging (zero-RAM slicing of >RAM data).
+    def __init__(self, file_path, shape, dtype="f64", create=True):
+        self.shape = []
+        for d in range(len(shape)):
+            self.shape.append(shape[d])
+        self.strides = row_major_strides(self.shape)
+        self.total_length = shape_total_length(self.shape)
+        self.dtype = dtype
+        self.rank_value = len(self.shape)
+        self.file_path = file_path
+        byte_length = self.total_length * _dtype_element_size(dtype)
+        self.byte_length = byte_length
+        self.handle = tv.io.open_mapped_file(file_path, byte_length, create)
+        self._view = None
+
+    def get_value(self, indices):
+        # Random access read straight from the memory-mapped view.
+        flat = 0
+        for i in range(len(indices)):
+            flat = flat + indices[i] * self.strides[i]
+        return tv.io.mapped_read_f64(self.handle, flat)
+
+    def set_value(self, value, indices):
+        flat = 0
+        for i in range(len(indices)):
+            flat = flat + indices[i] * self.strides[i]
+        tv.io.mapped_write_f64(self.handle, flat, value)
+
+    def to_ndarray(self):
+        # Materializes the disk-backed tensor into an in-memory NDArray.
+        array = NDArray(self.shape, dtype=self.dtype)
+        for i in range(self.total_length):
+            array.buffer.data[array.offset + i] = tv.io.mapped_read_f64(self.handle, i)
+        return array
+
+    def flush(self):
+        # Flushes dirty pages to disk.
+        tv.io.mapped_flush(self.handle)
+
+    def dispose(self):
+        if self.handle is not None:
+            tv.io.close_mapped_file(self.handle)
+            self.handle = None

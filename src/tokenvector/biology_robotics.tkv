@@ -1,0 +1,203 @@
+# Copyright (c) TokenVector Project. All rights reserved.
+# Licensed under the MIT License.
+#
+# TV-1001: TokenVector (`.tkv`) translation of Biology + Robotics modules.
+# Source of truth (C# reference implementations, 1:1 sections):
+#   Biology/ProteinGeometry.cs  -> ComputeDihedralAngle (phi/psi/omega),
+#       KabschRMSD, TMScore (d0 = 1.24 (L-15)^(1/3) - 1.8, floor 0.5)
+#   Robotics/OptimalControlAndRobotics.cs -> SolveDiscreteLQR (Riccati
+#       iteration), JacobianDLS (damped least squares IK),
+#       UnicycleKinematics (differential drive)
+#
+# Fidelity notes:
+#   - Dihedral angle keeps the standard n1.n2 / (n1 x m1).n2 formulation with
+#     atan2 range [-pi, pi].
+#   - LQR iterates P <- Q + A'PA - A'PB (R + B'PB)^-1 B'PA with ||dP||_F stop.
+
+import tv
+from tv.core import NDArray
+from tv.linalg import matmul, inverse as _inverse, solve as _linalg_solve
+from tv.geometry3d import align_point_clouds_kabsch
+
+def _abs(v):
+    if v < 0.0:
+        return -v
+    return v
+
+def _mat_add(a, b):
+    result = NDArray(a.shape)
+    for i in range(a.total_length):
+        result.buffer.data[result.offset + i] = a.buffer.data[a.offset + i] + b.buffer.data[b.offset + i]
+    return result
+
+def _mat_sub(a, b):
+    result = NDArray(a.shape)
+    for i in range(a.total_length):
+        result.buffer.data[result.offset + i] = a.buffer.data[a.offset + i] - b.buffer.data[b.offset + i]
+    return result
+
+# ---------------------------------------------------------------------------
+# ProteinGeometry  (Biology/ProteinGeometry.cs)
+# ---------------------------------------------------------------------------
+
+def _get(arr, i):
+    return arr.buffer.data[arr.offset + i]
+
+def compute_dihedral_angle(p1, p2, p3, p4):
+    # Dihedral (torsion) angle in [-pi, pi] from 4 consecutive 3D atoms.
+    b1x = _get(p2, 0) - _get(p1, 0)
+    b1y = _get(p2, 1) - _get(p1, 1)
+    b1z = _get(p2, 2) - _get(p1, 2)
+    b2x = _get(p3, 0) - _get(p2, 0)
+    b2y = _get(p3, 1) - _get(p2, 1)
+    b2z = _get(p3, 2) - _get(p2, 2)
+    b3x = _get(p4, 0) - _get(p3, 0)
+    b3y = _get(p4, 1) - _get(p3, 1)
+    b3z = _get(p4, 2) - _get(p3, 2)
+    # Normal vectors: n1 = b1 x b2, n2 = b2 x b3
+    n1x = b1y * b2z - b1z * b2y
+    n1y = b1z * b2x - b1x * b2z
+    n1z = b1x * b2y - b1y * b2x
+    n2x = b2y * b3z - b2z * b3y
+    n2y = b2z * b3x - b2x * b3z
+    n2z = b2x * b3y - b2y * b3x
+    # Unit vector along b2
+    b2_len = tv.sqrt(b2x * b2x + b2y * b2y + b2z * b2z)
+    if b2_len < 1e-15:
+        return 0.0
+    m1x = b2x / b2_len
+    m1y = b2y / b2_len
+    m1z = b2z / b2_len
+    # x = n1 . n2 ; y = (n1 x m1) . n2
+    x = n1x * n2x + n1y * n2y + n1z * n2z
+    n1_cross_m_x = n1y * m1z - n1z * m1y
+    n1_cross_m_y = n1z * m1x - n1x * m1z
+    n1_cross_m_z = n1x * m1y - n1y * m1x
+    y = n1_cross_m_x * n2x + n1_cross_m_y * n2y + n1_cross_m_z * n2z
+    return tv.atan2(y, x)
+
+def kabsch_rmsd(predicted, reference):
+    # Optimal RMSD after Kabsch superposition.
+    n = predicted.shape[0]
+    r, t = align_point_clouds_kabsch(predicted, reference)
+    total_dist_sq = 0.0
+    for i in range(n):
+        px = predicted.get([i, 0])
+        py = predicted.get([i, 1])
+        pz = predicted.get([i, 2])
+        rx = r.get([0, 0]) * px + r.get([0, 1]) * py + r.get([0, 2]) * pz + _get(t, 0)
+        ry = r.get([1, 0]) * px + r.get([1, 1]) * py + r.get([1, 2]) * pz + _get(t, 1)
+        rz = r.get([2, 0]) * px + r.get([2, 1]) * py + r.get([2, 2]) * pz + _get(t, 2)
+        dx = rx - reference.get([i, 0])
+        dy = ry - reference.get([i, 1])
+        dz = rz - reference.get([i, 2])
+        total_dist_sq = total_dist_sq + dx * dx + dy * dy + dz * dz
+    return tv.sqrt(total_dist_sq / n)
+
+def _cbrt(v):
+    # Real cube root.
+    if v >= 0.0:
+        return tv.exp(tv.log(v) / 3.0)
+    return -tv.exp(tv.log(-v) / 3.0)
+
+def tm_score(predicted, reference):
+    # TM-score in [0, 1]; > 0.5 ~ same fold.
+    l_ref = reference.shape[0]
+    if l_ref == 0:
+        return 0.0
+    # d0 = 1.24 * (L_ref - 15)^(1/3) - 1.8, floored at 0.5
+    if l_ref > 15:
+        d0 = 1.24 * _cbrt(l_ref - 15) - 1.8
+    else:
+        d0 = 0.5
+    if d0 < 0.5:
+        d0 = 0.5
+    d0_sq = d0 * d0
+    r, t = align_point_clouds_kabsch(predicted, reference)
+    sum_v = 0.0
+    for i in range(l_ref):
+        px = predicted.get([i, 0])
+        py = predicted.get([i, 1])
+        pz = predicted.get([i, 2])
+        rx = r.get([0, 0]) * px + r.get([0, 1]) * py + r.get([0, 2]) * pz + _get(t, 0)
+        ry = r.get([1, 0]) * px + r.get([1, 1]) * py + r.get([1, 2]) * pz + _get(t, 1)
+        rz = r.get([2, 0]) * px + r.get([2, 1]) * py + r.get([2, 2]) * pz + _get(t, 2)
+        dx = rx - reference.get([i, 0])
+        dy = ry - reference.get([i, 1])
+        dz = rz - reference.get([i, 2])
+        di_sq = dx * dx + dy * dy + dz * dz
+        sum_v = sum_v + 1.0 / (1.0 + di_sq / d0_sq)
+    return sum_v / l_ref
+
+# ---------------------------------------------------------------------------
+# OptimalControlAndRobotics  (Robotics/OptimalControlAndRobotics.cs)
+# ---------------------------------------------------------------------------
+
+def solve_discrete_lqr(a_mat, b_mat, q_mat, r_mat, max_iter=500, tolerance=1e-9):
+    # Discrete-time LQR via Riccati iteration -> [K (feedback gain), P].
+    if a_mat.rank() != 2 or b_mat.rank() != 2 or q_mat.rank() != 2 or r_mat.rank() != 2:
+        raise ValueError("Matrices A, B, Q, R must be 2D")
+    n = a_mat.shape[0]
+    p = q_mat.clone()
+    at = a_mat.transpose()
+    bt = b_mat.transpose()
+    for iteration in range(max_iter):
+        # R + B' P B
+        bt_p = matmul(bt, p)
+        bt_pb = matmul(bt_p, b_mat)
+        r_bt_pb = _mat_add(bt_pb, r_mat)
+        inv_r_bt_pb = _inverse(r_bt_pb)
+        # A' P B and A' P A
+        at_p = matmul(at, p)
+        at_pb = matmul(at_p, b_mat)
+        at_pa = matmul(at_p, a_mat)
+        # step = A'PB (R + B'PB)^-1 B'PA
+        bt_pa = matmul(bt_p, a_mat)
+        step = matmul(at_pb, matmul(inv_r_bt_pb, bt_pa))
+        p_next = _mat_add(q_mat, _mat_sub(at_pa, step))
+        # Convergence ||PNext - P||_F
+        diff = 0.0
+        for i in range(n):
+            for j in range(n):
+                d = p_next.get([i, j]) - p.get([i, j])
+                diff = diff + d * d
+        p = p_next
+        if tv.sqrt(diff) < tolerance:
+            break
+    # K = (R + B' P B)^-1 (B' P A)
+    bt_p_final = matmul(bt, p)
+    r_bt_pb_final = _mat_add(matmul(bt_p_final, b_mat), r_mat)
+    inv_final = _inverse(r_bt_pb_final)
+    bt_pa_final = matmul(bt_p_final, a_mat)
+    k = matmul(inv_final, bt_pa_final)
+    return [k, p]
+
+def jacobian_dls(jacobian, delta_x, lam=0.01):
+    # Damped least squares IK: dTheta = J^T (J J^T + lambda^2 I)^-1 dx.
+    if jacobian.rank() != 2:
+        raise ValueError("Jacobian must be a 2D matrix")
+    m = jacobian.shape[0]
+    n = jacobian.shape[1]
+    j_t = jacobian.transpose()
+    j_jt = matmul(jacobian, j_t)
+    lambda_sq = lam * lam
+    for i in range(m):
+        j_jt.set([i, i], j_jt.get([i, i]) + lambda_sq)
+    if delta_x.rank() == 1:
+        dx_2d = delta_x.reshape([m, 1])
+    else:
+        dx_2d = delta_x
+    y = _linalg_solve(j_jt, dx_2d)
+    d_theta = matmul(j_t, y)
+    if delta_x.rank() == 1:
+        return d_theta.reshape([n])
+    return d_theta
+
+def unicycle_kinematics(x, y, theta, v, omega, dt):
+    # 2D unicycle / differential drive forward kinematics -> [x, y, theta].
+    if _abs(omega) < 1e-9:
+        return [x + v * tv.cos(theta) * dt, y + v * tv.sin(theta) * dt, theta]
+    theta_next = theta + omega * dt
+    x_next = x + (v / omega) * (tv.sin(theta_next) - tv.sin(theta))
+    y_next = y - (v / omega) * (tv.cos(theta_next) - tv.cos(theta))
+    return [x_next, y_next, theta_next]
