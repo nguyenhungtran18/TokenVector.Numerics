@@ -120,29 +120,27 @@ Xem [src/tokenvector/README.md](src/tokenvector/README.md) để biết bản đ
 
 ## 🚀 Bắt Đầu Nhanh & Mẫu Sử Dụng
 
-```csharp
-using TokenVector.Numerics.Core;
-using TokenVector.Numerics.Autograd;
-using TokenVector.Numerics.Autograd.NN;
-using TokenVector.Numerics.Autograd.Optim;
+```tkv
+import tv
+from tv.core import from_array
+import tv.autograd as ag
 
-// 1. Slicing mảng đa chiều Zero-copy & Broadcasting
-var a = NDArray<double>.FromArray([1, 2, 3, 4, 5, 6], 2, 3);
-var b = NDArray<double>.FromArray([10, 20, 30], 1, 3);
-var c = a + b; // Stride-0 Broadcasting -> [2, 3]
+# 1. Slicing tensor đa chiều Zero-copy & Broadcasting
+a = from_array([1, 2, 3, 4, 5, 6], [2, 3])
+b = from_array([10, 20, 30], [1, 3])
+c = tv.ops.add(a, b)                     # Broadcasting Stride-0 -> [2, 3]
+view = a.slice([[0, 2, 1], [1, 3, 1]])   # view zero-copy ~ a[0:2, 1:3]
 
-// 2. Tự động vi phân trên đồ thị động (Autograd)
-var x = new Tensor<double>(3.0, requiresGrad: true);
-var y = (x * x) + (2.0 * x) + 1.0;
-y.Backward();
-Console.WriteLine(x.Grad!.Buffer[0]); // dy/dx = 2*3 + 2 = 8.0
+# 2. Tự động vi phân trên đồ thị động (Autograd)
+x = ag.Tensor.full(3.0, [1])
+x.requires_grad = True
+y = (x * x) + (2.0 * x) + 1.0
+y.backward()
+print(x.grad.get([0]))                   # dy/dx = 2*3 + 2 = 8.0
 
-// 3. Huấn luyện mạng nơ-ron Perceptron đa tầng (MLP)
-var model = new Sequential<double>(
-    new Linear<double>(inFeatures: 2, outFeatures: 8),
-    new Linear<double>(inFeatures: 8, outFeatures: 1)
-);
-var optimizer = new AdamW<double>(model.Parameters(), lr: 0.05);
+# 3. Huấn luyện mạng nơ-ron Perceptron đa tầng (MLP)
+model = ag.Sequential([ag.Linear(2, 8), ag.Linear(8, 1)])
+optimizer = ag.AdamW(model.parameters(), lr=0.05)
 ```
 
 ---

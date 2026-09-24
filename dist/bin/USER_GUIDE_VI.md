@@ -32,21 +32,22 @@
 
 `NDArray<T>` là cấu trúc dữ liệu cốt lõi, quản lý bộ nhớ unmanaged hoặc GC qua `TensorBuffer<T>`, hỗ trợ cắt lát zero-copy $O(1)$.
 
-```csharp
-using TokenVector.Numerics.Core;
+```tkv
+import tv
+from tv.core import from_array
 
-// 1. Khởi tạo mảng từ mảng 1D phẳng
-var a = NDArray<double>.FromArray([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], 2, 3);
+# 1. Khởi tạo mảng từ mảng 1D phẳng
+a = from_array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], [2, 3])
 
-// 2. Cấp phát mảng Native Unmanaged Memory (Zero-GC pressure)
-using var nativeArr = NDArray<float>.AllocateNative(1024, 1024);
+# 2. Cấp phát bộ nhớ native unmanaged (Zero-GC pressure)
+native_arr = tv.core.allocate_native([1024, 1024], dtype=tv.f32)
 
-// 3. Cắt lát Zero-Copy (Slice view)
-var slice = a.Slice(Slice.Range(0, 2), Slice.Range(1, 3)); // Shape [2, 2]
+# 3. Cắt lát Zero-Copy (Slice view)
+view = a.slice([[0, 2, 1], [1, 3, 1]])  # Shape [2, 2]
 
-// 4. Biến đổi hình dạng (Reshape & Permute)
-var reshaped = a.Reshape(3, 2);
-var permuted = a.Permute(1, 0); // Transpose 2D
+# 4. Biến đổi hình dạng (Reshape & Permute)
+reshaped = a.reshape([3, 2])
+permuted = a.permute([1, 0])  # Transpose 2D
 ```
 
 ---
@@ -55,250 +56,257 @@ var permuted = a.Permute(1, 0); // Transpose 2D
 
 `TokenVector.Numerics` tích hợp thuật toán Broadcasting right-aligned chuẩn kết hợp kỹ thuật **Stride-0** và phần cứng **AVX2/FMA**.
 
-```csharp
-using TokenVector.Numerics.Core;
+```tkv
+import tv
+from tv.core import from_array, zeros
 
-var mat = NDArray<double>.Zeros(4, 3);
-var bias = NDArray<double>.FromArray([10.0, 20.0, 30.0], 1, 3);
+mat = zeros([4, 3])
+bias = from_array([10.0, 20.0, 30.0], [1, 3])
 
-// Tự động broadcast bias (1, 3) lên ma trận (4, 3) với Stride-0 trick
-var res = mat + bias;
+# Tự động broadcast bias (1, 3) lên ma trận (4, 3) với Stride-0 trick
+res = tv.ops.add(mat, bias)
 
-// Ép tập lệnh phần cứng SIMD Vector256<double> cho các mảng liền kề (Contiguous)
-var sum = res.Sum();
-var mean = res.Mean(axis: 0);
+# Kernel SIMD/AVX2 chạy trên bộ nhớ liền kề (Contiguous)
+total = tv.ops.sum(res)
+avg = tv.ops.mean_axis(res, 0)
 ```
 
 ---
 
 ## CHƯƠNG 3: ĐẠI SỐ TUYẾN TÍNH & PHÂN RÃ MA TRẬN (SVD, EIGEN, EINSUM, KRON)
 
-```csharp
-using TokenVector.Numerics.Core;
-using TokenVector.Numerics.LinAlg;
+```tkv
+import tv
+from tv.core import from_array
+from tv import linalg
 
-var A = NDArray<double>.FromArray([4.0, 1.0, 2.0, 1.0, 3.0, 0.0, 2.0, 0.0, 5.0], 3, 3);
-var b = NDArray<double>.FromArray([7.0, 4.0, 7.0], 3, 1);
+A = from_array([4.0, 1.0, 2.0, 1.0, 3.0, 0.0, 2.0, 0.0, 5.0], [3, 3])
+b = from_array([7.0, 4.0, 7.0], [3, 1])
 
-// 1. Giải hệ phương trình tuyến tính Ax = b bằng LU Partial Pivoting
-var x = Decomposition.Solve(A, b);
+# 1. Giải hệ phương trình tuyến tính Ax = b bằng LU Partial Pivoting
+x = linalg.solve(A, b)
 
-// 2. Phân rã giá trị suy biến SVD: A = U * S * V^T
-var (U, S, Vt) = SVD.Decompose(A);
+# 2. Phân rã giá trị suy biến SVD: A = U * S * V^T
+U, S, Vt = linalg.svd(A)
 
-// 3. Trị riêng và vector riêng ma trận đối xứng (Eigen / Eigh)
-var (eigenValues, eigenVectors) = Eigen.Eigh(A);
+# 3. Trị riêng và vector riêng ma trận đối xứng (Eigh)
+eigen_values, eigen_vectors = linalg.eigh(A)
 
-// 4. Einstein Summation Contraction
-var C = EinSum.Evaluate("ij,jk->ik", A, A);
+# 4. Einstein Summation Contraction
+C = linalg.einsum("ij,jk->ik", [A, A])
 
-// 5. Tích Kronecker
-var K = MatrixOps.Kron(A, NDArray<double>.Eye(2));
+# 5. Tích Kronecker
+K = linalg.kron(A, tv.core.eye(2))
 ```
 
 ---
 
 ## CHƯƠNG 4: HÀM MA TRẬN GIẢI TÍCH (MATRIX FUNCTIONS)
 
-```csharp
-using TokenVector.Numerics.Core;
-using TokenVector.Numerics.LinAlg;
+```tkv
+import tv
+from tv.core import from_array
+import tv.linalg_functions as lf
 
-// 1. Ma trận mũ e^A bằng xấp xỉ Padé [6/6] kết hợp Scaling and Squaring
-var a = NDArray<double>.FromArray([0.0, 1.0, -1.0, 0.0], 2, 2);
-var expmA = MatrixFunctions.Expm(a); // Ma trận quay cos(1), sin(1)
+# 1. Ma trận mũ e^A bằng xấp xỉ Padé [6/6] kết hợp Scaling and Squaring
+a = from_array([0.0, 1.0, -1.0, 0.0], [2, 2])
+expm_a = lf.expm(a)  # Ma trận quay cos(1), sin(1)
 
-// 2. Căn bậc hai ma trận S = sqrt(A) sao cho S * S = A
-var s = MatrixFunctions.Sqrtm(a);
+# 2. Căn bậc hai ma trận S = sqrt(A) sao cho S * S = A
+s = lf.sqrtm(a)
 
-// 3. Giải phương trình ma trận Sylvester: AX + XB = C
-var solX = MatrixFunctions.SolveSylvester(A, B, C);
+# 3. Giải phương trình ma trận Sylvester: AX + XB = C
+sol_x = lf.solve_sylvester_cm(A, B, C)
 ```
 
 ---
 
 ## CHƯƠNG 5: CƠ HỌC KHÔNG GIAN & THIÊN VĂN VŨ TRỤ (ASTRODYNAMICS)
 
-```csharp
-using TokenVector.Numerics.Science;
+```tkv
+import tv
+import tv.astro
 
-// 1. Giải phương trình Kepler: M = E - e*sin(E)
-double e = 0.05; // Độ lệch tâm
-double M = 1.25; // Dị thường trung bình (rad)
-double E = Astrodynamics.SolveKepler(M, e);
+# 1. Giải phương trình Kepler: M = E - e*sin(E)
+e = 0.05       # Độ lệch tâm
+m_anom = 1.25  # Dị thường trung bình (rad)
+ecc_anom = tv.astro.solve_kepler(m_anom, e)
 
-// 2. Chuyển đổi 6 phần tử quỹ đạo Kepler sang vector vị trí (r) và vận tốc (v) ECI 3D
-var (r, v) = Astrodynamics.KeplerianToCartesian(
-    a: 7000.0, e: 0.01, i: 0.9, raan: 1.2, omega: 0.5, nu: 0.8
-);
+# 2. Chuyển đổi 6 phần tử quỹ đạo Kepler sang vector vị trí (r) và vận tốc (v) ECI 3D
+r_vec, v_vec = tv.astro.keplerian_to_cartesian(7000.0, 0.01, 0.9, 1.2, 0.5, 0.8)
 
-// 3. Tính toán chuyển dịch quỹ đạo Hohmann (LEO sang GEO)
-var (dv1, dv2, totalDv, tof) = Astrodynamics.HohmannTransfer(6678.137, 42164.0);
+# 3. Tính toán chuyển dịch quỹ đạo Hohmann (LEO sang GEO)
+dv1, dv2, total_dv, tof = tv.astro.hohmann_transfer(6678.137, 42164.0)
 
-// 4. Chuyển đổi tọa độ trắc địa Trái Đất WGS84 sang Cartesian ECEF
-var ecef = Astrodynamics.GeodeticToEcef(latDeg: 21.0285, lonDeg: 105.8542, altKm: 0.02);
+# 4. Chuyển đổi tọa độ trắc địa Trái Đất WGS84 sang Cartesian ECEF
+ecef = tv.astro.geodetic_to_ecef(21.0285, 105.8542, 0.02)
 ```
 
 ---
 
 ## CHƯƠNG 6: TOÁN TÀI CHÍNH ĐỊNH LƯỢNG & QUYỀN CHỌN (FINANCEMATH)
 
-```csharp
-using TokenVector.Numerics.Finance;
+```tkv
+import tv.finance
 
-// 1. Định giá quyền chọn Black-Scholes-Merton & The Greeks
-double callPrice = FinanceMath.BlackScholesCall(s: 100.0, k: 100.0, t: 1.0, r: 0.05, sigma: 0.20);
-double putPrice = FinanceMath.BlackScholesPut(s: 100.0, k: 100.0, t: 1.0, r: 0.05, sigma: 0.20);
+# 1. Định giá quyền chọn Black-Scholes-Merton & The Greeks
+call_price = tv.finance.black_scholes_call(100.0, 100.0, 1.0, 0.05, 0.20)
+put_price = tv.finance.black_scholes_put(100.0, 100.0, 1.0, 0.05, 0.20)
 
-var (delta, gamma, vega, theta, rho) = FinanceMath.OptionGreeks(100.0, 100.0, 1.0, 0.05, 0.20);
+delta, gamma, vega, theta, rho = tv.finance.option_greeks(100.0, 100.0, 1.0, 0.05, 0.20)
 
-// 2. Lý thuyết danh mục đầu tư Markowitz & Sharpe Ratio
-double expReturn = FinanceMath.PortfolioReturn(weights, assetReturns);
-double expVol = FinanceMath.PortfolioVolatility(weights, covMatrix);
-double sharpe = FinanceMath.SharpeRatio(weights, assetReturns, covMatrix, riskFreeRate: 0.02);
+# 2. Lý thuyết danh mục đầu tư Markowitz & Sharpe Ratio
+exp_return = tv.finance.portfolio_return(weights, asset_returns)
+exp_vol = tv.finance.portfolio_volatility(weights, cov_matrix)
+sharpe = tv.finance.sharpe_ratio(weights, asset_returns, cov_matrix, 0.02)
 
-// 3. Chiết khấu dòng tiền NPV và IRR
-double npv = FinanceMath.NPV(0.08, cashFlows);
-double irr = FinanceMath.IRR(cashFlows);
+# 3. Chiết khấu dòng tiền NPV và IRR
+npv_val = tv.finance.npv(0.08, cash_flows)
+irr_val = tv.finance.irr(cash_flows)
 ```
 
 ---
 
 ## CHƯƠNG 7: DỰ BÁO THỐNG KÊ & BỘ LỌC KALMAN (TIMESERIESANDKALMAN)
 
-```csharp
-using TokenVector.Numerics.Statistics;
+```tkv
+import tv.core
+import tv.statistics as stats
 
-// 1. Bộ lọc Kalman 1D
-var kf = new TimeSeriesAndKalman.KalmanFilter1D(initialState: 0.0, initialVariance: 1.0, processNoise: 0.01, measurementNoise: 0.1);
-kf.Predict();
-double filteredState = kf.Update(measuredValue);
+# 1. Bộ lọc Kalman 1D
+kf = stats.KalmanFilter1D(0.0, 1.0, 0.01, 0.1)
+kf.predict()
+filtered_state = kf.update(measured_value)
 
-// 2. Bộ lọc Kalman đa chiều (ND State)
-var kfNd = new TimeSeriesAndKalman.KalmanFilterND(x0, P0, F, H, Q, R);
-kfNd.Predict();
-var state = kfNd.Update(measurement);
+# 2. Bộ lọc Kalman đa chiều (ND State)
+kf_nd = stats.KalmanFilterND(x0, p0, f_mat, h_mat, q_mat, r_mat)
+kf_nd.predict()
+state = kf_nd.update(measurement)
 
-// 3. Dự báo xu hướng Holt Linear Trend
-var (fitted, forecast) = TimeSeriesAndKalman.HoltLinearTrend(series, alpha: 0.8, beta: 0.2, forecastSteps: 5);
+# 3. Dự báo xu hướng Holt Linear Trend
+fitted, forecast = stats.holt_linear_trend(series, 0.8, 0.2, 5)
 ```
 
 ---
 
 ## CHƯƠNG 8: TOÁN VẬT LÝ & CƠ HỌC TÍNH TOÁN (PHYSICSODEANDFIELDS)
 
-```csharp
-using TokenVector.Numerics.Core;
-using TokenVector.Numerics.Physics;
+```tkv
+import tv.core
+import tv.physics
 
-// 1. Tích phân hệ phương trình vi phân Runge-Kutta bậc 4 (RK4)
-Func<double, NDArray<double>, NDArray<double>> harmonicOscillator = (t, y) =>
-    NDArray<double>.FromArray([y[1], -y[0]], 2);
+# 1. Tích phân hệ phương trình vi phân Runge-Kutta bậc 4 (RK4)
+def harmonic_oscillator(t, y):
+    return tv.core.from_array([y.get([1]), -y.get([0])], [2])
 
-var (times, trajectory) = PhysicsODEAndFields.SolveRK4(harmonicOscillator, 0.0, 10.0, y0, numSteps: 200);
+times, trajectory = tv.physics.solve_rk4(harmonic_oscillator, 0.0, 10.0, y0, 200)
 
-// 2. Mô phỏng động lực học đa vật thể hấp dẫn N-Body bằng Symplectic Verlet
-var (newPos, newVel) = PhysicsODEAndFields.NBodyVerletStep(positions, velocities, masses, dt: 0.01);
+# 2. Mô phỏng động lực học đa vật thể hấp dẫn N-Body bằng Symplectic Verlet
+new_pos, new_vel = tv.physics.nbody_verlet_step(positions, velocities, masses, 0.01)
 
-// 3. Toán tử vi phân trường vector 3D
-var (gx, gy, gz) = PhysicsODEAndFields.Gradient3D(scalarField);
-var div = PhysicsODEAndFields.Divergence3D(fx, fy, fz);
-var (cx, cy, cz) = PhysicsODEAndFields.Curl3D(fx, fy, fz);
-var laplacian = PhysicsODEAndFields.Laplacian3D(scalarField);
+# 3. Toán tử vi phân trường vector 3D
+gx, gy, gz = tv.physics.gradient_3d(scalar_field)
+div = tv.physics.divergence_3d(fx, fy, fz)
+cx, cy, cz = tv.physics.curl_3d(fx, fy, fz)
+lap = tv.physics.laplacian_3d(scalar_field)
 ```
 
 ---
 
 ## CHƯƠNG 9: HÌNH HỌC KHÔNG GIAN 3D & ĐÁM MÂY ĐIỂM (GEOMETRY3DANDPOINTCLOUDS)
 
-```csharp
-using TokenVector.Numerics.Spatial;
+```tkv
+import tv.core
+import tv.geometry3d
+import tv.spatial
 
-// 1. Căn chỉnh khớp 2 đám mây điểm 3D (ICP / Kabsch Algorithm)
-var (rotationMatrix, translationVec) = Geometry3DAndPointClouds.AlignPointCloudsKabsch(sourceCloud, targetCloud);
+# 1. Căn chỉnh khớp 2 đám mây điểm 3D (Kabsch)
+rotation_matrix, translation_vec = tv.geometry3d.align_point_clouds_kabsch(source_cloud, target_cloud)
 
-// 2. Giao cắt Tia - Tam giác Möller-Trumbore (Ray Tracing)
-var (hit, dist, u, v) = Geometry3DAndPointClouds.RayTriangleIntersect(rayOrigin, rayDir, v0, v1, v2);
+# 2. Giao cắt Tia - Tam giác Möller-Trumbore (Ray Tracing)
+has_hit, dist, u_coord, v_coord = tv.geometry3d.ray_triangle_intersect(ray_origin, ray_dir, v0, v1, v2)
 
-// 3. Khoảng cách Điểm - Mặt phẳng
-double distPlane = Geometry3DAndPointClouds.PointToPlaneDistance(point, planePt, planeNormal);
+# 3. Khoảng cách Điểm - Mặt phẳng
+dist_plane = tv.geometry3d.point_to_plane_distance(point, plane_pt, plane_normal)
 
-// 4. Phép biến đổi Affine 4x4 và Quaternion
-var transform = Affine3D.LookAt(eye, target, up);
-var q = Quaternion<double>.FromAxisAngle(axis, angleRad);
+# 4. Quaternion & phép biến đổi 4x4
+q = tv.spatial.quaternion_from_axis_angle(ax, ay, az, angle_rad)
+transform = tv.spatial.quaternion_to_rotation_matrix_4x4(q)
 ```
 
 ---
 
 ## CHƯƠNG 10: XỬ LÝ TÍN HIỆU & LỌC DSP (BLUESTEIN FFT, WINDOWS)
 
-```csharp
-using TokenVector.Numerics.Core;
-using TokenVector.Numerics.LinAlg;
+```tkv
+import tv.fft
+import tv.signal
 
-// 1. Biến đổi Fourier nhanh (Bluestein Chirp-Z FFT) cho độ dài nguyên tố bất kỳ N = 1009
-var signal = NDArray<double>.FromArray(rawData, 1009);
-var spectrum = FFT.FFT1D(signal); // Complex NDArray
+# 1. Biến đổi Fourier nhanh (Bluestein Chirp-Z FFT) cho độ dài nguyên tố bất kỳ N = 1009
+spectrum = tv.fft.fft1d(raw_data)  # into/out of list of Complex
 
-// 2. Cửa sổ lọc tín hiệu DSP (Blackman, Hanning, Hamming)
-var win = SignalProcessing.Blackman(1024);
-var filtered = SignalProcessing.Convolve(signal, win, mode: "same");
+# 2. Cửa sổ lọc tín hiệu DSP (Blackman, Hanning, Hamming)
+win = tv.signal.blackman(1024)
+filtered = tv.signal.convolve(signal_t, win, "same")
 ```
 
 ---
 
 ## CHƯƠNG 11: HÀM TOÁN HỌC ĐẶC BIỆT (ERF, GAMMA, BESSEL)
 
-```csharp
-using TokenVector.Numerics.LinAlg;
+```tkv
+import tv.special
 
-double erfVal = SpecialFunctions.Erf(1.5);
-double gammaVal = SpecialFunctions.Gamma(5.0); // 4! = 24.0
-double logGamma = SpecialFunctions.LogGamma(10.0);
-double digamma = SpecialFunctions.Digamma(2.5);
-double besselJ0 = SpecialFunctions.BesselJ0(2.4048); // ~0.0 (Zero đầu tiên)
+erf_val = tv.special.erf_scalar(1.5)
+gamma_val = tv.special.gamma_scalar(5.0)      # 4! = 24.0
+log_gamma_val = tv.special.log_gamma_scalar(10.0)
+digamma_val = tv.special.digamma(2.5)
+bessel_j0_val = tv.special.bessel_j0_scalar(2.4048)  # ~0.0 (Zero đầu tiên)
 ```
 
 ---
 
 ## CHƯƠNG 12: TOÁN ĐA THỨC, TÍCH LŨY, SAI PHÂN, LƯỚI & TẬP HỢP
 
-```csharp
-using TokenVector.Numerics.Core;
-using TokenVector.Numerics.LinAlg;
-using TokenVector.Numerics.Ops;
+```tkv
+import tv.core
+from tv.core import from_array
+import tv.compare
+import tv.grid
+import tv.poly
 
-// 1. Khớp đa thức bậc n (PolyFit) và tính nghiệm (Roots)
-var x = NDArray<double>.FromArray([0, 1, 2, 3], 4);
-var y = NDArray<double>.FromArray([1, 3, 7, 13], 4);
-var coeffs = Polynomial.PolyFit(x, y, degree: 2);
-var roots = Polynomial.Roots(coeffs);
+# 1. Khớp đa thức bậc n (poly_fit) và tính nghiệm (roots)
+x = from_array([0, 1, 2, 3], [4])
+y = from_array([1, 3, 7, 13], [4])
+coeffs = tv.poly.poly_fit(x, y, 2)
+roots = tv.poly.roots(coeffs)
 
-// 2. Tích lũy (CumSum) và Sai phân (Diff)
-var cum = x.CumSum();
-var d = CumulativeOps.Diff(y, n: 1);
+# 2. Tích lũy (cumsum) và Sai phân (diff)
+cum = tv.grid.cumsum(x)
+d = tv.grid.diff(y)
 
-// 3. Lưới tọa độ Meshgrid và phép toán tập hợp
-var (XGrid, YGrid) = GridOps.Meshgrid(x, y);
-var common = SetOperations.Intersect1D(arr1, arr2);
+# 3. Lưới tọa độ Meshgrid và phép toán tập hợp
+x_grid, y_grid = tv.grid.meshgrid([x, y])
+common = tv.compare.intersect1d(arr1, arr2)
 ```
 
 ---
 
 ## CHƯƠNG 13: HẠT NHÂN AI, DEEP LEARNING & TRANSFORMER (NEURAL)
 
-```csharp
-using TokenVector.Numerics.Neural;
+```tkv
+import tv.core
+import tv.neural
 
-// 1. Rotary Positional Embedding (RoPE) cho LLM (Llama 3 / Mistral)
-var ropeQ = AttentionEngine.ApplyRoPE(qTensor, cosCache, sinCache);
+# 1. Rotary Positional Embedding (RoPE) cho LLM (Llama 3 / Mistral)
+rope_q = tv.neural.apply_rope(q_tensor, 0, 10000.0)
 
-// 2. Scaled Dot-Product Attention (FlashAttention compatible)
-var attnOut = AttentionEngine.ScaledDotProductAttention(Q, K, V, mask: causalMask);
+# 2. Scaled Dot-Product Attention (FlashAttention compatible)
+attn_out, attn_weights = tv.neural.scaled_dot_product_attention(q, k, v, causal_mask)
 
-// 3. RMSNorm & Sinkhorn Optimal Transport
-var normed = Normalization.RMSNorm(hiddenStates, weightGamma);
-var distW = OptimalTransportAndDiffusion.Sinkhorn(sourceDist, targetDist, costMatrix, reg: 0.1);
+# 3. RMSNorm & Sinkhorn Optimal Transport
+normed = tv.neural.rms_norm(hidden_states, weight_gamma)
+dist_w, plan = tv.neural.sinkhorn(source_dist, target_dist, cost_matrix, 0.1)
 ```
 
 ---
@@ -307,49 +315,47 @@ var distW = OptimalTransportAndDiffusion.Sinkhorn(sourceDist, targetDist, costMa
 
 Hệ thống **Autograd Engine** xây dựng đồ thị tính toán động (Dynamic DAG) và tự động tính gradient theo cơ chế Reverse-Mode Backpropagation.
 
-```csharp
-using TokenVector.Numerics.Autograd;
-using TokenVector.Numerics.Autograd.NN;
-using TokenVector.Numerics.Autograd.Optim;
-using TokenVector.Numerics.Autograd.Nodes;
+```tkv
+import tv.core
+from tv.core import from_array
+import tv.autograd as ag
 
-// 1. Tự động vi phân biểu thức số học
-var x = new Tensor<double>(3.0, requiresGrad: true);
-var y = new Tensor<double>(2.0, requiresGrad: true);
-var z = (x + y) * (x - y); // z = x^2 - y^2
-z.Backward();
+# 1. Tự động vi phân biểu thức số học
+x = ag.Tensor.full(3.0, [1])
+x.requires_grad = True
+y = ag.Tensor.full(2.0, [1])
+y.requires_grad = True
+z = (x + y) * (x - y)  # z = x^2 - y^2
+z.backward()
 
-Console.WriteLine($"dz/dx = {x.Grad!.Buffer[0]}"); // 6.0 (2*x)
-Console.WriteLine($"dz/dy = {y.Grad!.Buffer[0]}"); // -4.0 (-2*y)
+print(x.grad.get([0]))  # dz/dx = 6.0 (2*x)
+print(y.grad.get([0]))  # dz/dy = -4.0 (-2*y)
 
-// 2. Vi phân Ma trận & Unbroadcasting
-var X = new Tensor<double>(new double[] { 1, 2, 3, 4 }, new[] { 2, 2 }, requiresGrad: true);
-var W = new Tensor<double>(new double[] { 0.5, -0.5, 1.0, 2.0 }, new[] { 2, 2 }, requiresGrad: true);
-var b = new Tensor<double>(new double[] { 0.1, 0.2 }, new[] { 1, 2 }, requiresGrad: true);
+# 2. Vi phân Ma trận & Unbroadcasting
+x_mat = ag.Tensor.from_ndarray(from_array([1, 2, 3, 4], [2, 2]), requires_grad=True)
+w_mat = ag.Tensor.from_ndarray(from_array([0.5, -0.5, 1.0, 2.0], [2, 2]), requires_grad=True)
+b_vec = ag.Tensor.from_ndarray(from_array([0.1, 0.2], [1, 2]), requires_grad=True)
 
-var Y = X.MatMul(W) + b;
-var loss = Y.Sum();
-loss.Backward(); // Tự động unbroadcast bias gradient về shape [1, 2]
+y_mat = x_mat.matmul(w_mat) + b_vec
+loss = y_mat.sum()
+loss.backward()  # Tự động unbroadcast bias gradient về shape [1, 2]
 
-// 3. Huấn luyện Mạng Nơ-ron (MLP) với AdamW
-var inputs = new Tensor<double>(new double[] { 0,0, 0,1, 1,0, 1,1 }, new[] { 4, 2 });
-var targets = new Tensor<double>(new double[] { 0, 1, 1, 0 }, new[] { 4, 1 });
+# 3. Huấn luyện Mạng Nơ-ron (MLP) với AdamW
+inputs = ag.Tensor.from_ndarray(from_array([0, 0, 0, 1, 1, 0, 1, 1], [4, 2]))
+targets = ag.Tensor.from_ndarray(from_array([0, 1, 1, 0], [4, 1]))
 
-var l1 = new Linear<double>(inFeatures: 2, outFeatures: 8);
-var l2 = new Linear<double>(inFeatures: 8, outFeatures: 1);
-var model = new Sequential<double>(l1, l2);
-var optimizer = new AdamW<double>(model.Parameters(), lr: 0.1);
+model = ag.Sequential([ag.Linear(2, 8), ag.Linear(8, 1)])
+optimizer = ag.AdamW(model.parameters(), lr=0.1)
 
-for (int epoch = 0; epoch < 200; epoch++)
-{
-    optimizer.ZeroGrad();
-    var h = l1.Forward(inputs).Tanh();
-    var preds = l2.Forward(h).Sigmoid();
-    var mse = ActivationAndReductionNodes<double>.MSELoss(preds, targets);
-    
-    mse.Backward();
-    optimizer.Step();
-}
+epoch = 0
+while epoch < 200:
+    optimizer.zero_grad()
+    h = ag.tanh(model.modules[0].forward(inputs))
+    preds = ag.sigmoid(model.modules[1].forward(h))
+    mse = ag.mse_loss(preds, targets)
+    mse.backward()
+    optimizer.step()
+    epoch = epoch + 1
 ```
 
 ---
@@ -401,7 +407,7 @@ python tests/tokenvector/benchmark_vs_numpy.py
 
 ### 15.4 Bắt đầu nhanh với TokenVector
 
-```tokenvector
+```tkv
 import tv
 from tv.core import from_array
 from tv import linalg

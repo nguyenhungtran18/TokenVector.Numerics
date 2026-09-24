@@ -32,21 +32,22 @@
 
 `NDArray<T>` is the core data structure managing unmanaged native memory or GC pinned arrays via `TensorBuffer<T>`, featuring $O(1)$ zero-copy slicing.
 
-```csharp
-using TokenVector.Numerics.Core;
+```tkv
+import tv
+from tv.core import from_array
 
-// 1. Initialize tensor from flat array
-var a = NDArray<double>.FromArray([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], 2, 3);
+# 1. Initialize tensor from flat array
+a = from_array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], [2, 3])
 
-// 2. Allocate Native Unmanaged Memory (Zero-GC pressure)
-using var nativeArr = NDArray<float>.AllocateNative(1024, 1024);
+# 2. Allocate native unmanaged memory (zero-GC pressure)
+native_arr = tv.core.allocate_native([1024, 1024], dtype=tv.f32)
 
-// 3. Zero-Copy Slicing (View)
-var slice = a.Slice(Slice.Range(0, 2), Slice.Range(1, 3)); // Shape [2, 2]
+# 3. Zero-copy slicing (view)
+view = a.slice([[0, 2, 1], [1, 3, 1]])  # Shape [2, 2]
 
-// 4. Shape Transformations (Reshape & Permute)
-var reshaped = a.Reshape(3, 2);
-var permuted = a.Permute(1, 0); // 2D Transpose
+# 4. Shape transformations (Reshape & Permute)
+reshaped = a.reshape([3, 2])
+permuted = a.permute([1, 0])  # 2D transpose
 ```
 
 ---
@@ -55,250 +56,257 @@ var permuted = a.Permute(1, 0); // 2D Transpose
 
 `TokenVector.Numerics` incorporates right-aligned broadcasting powered by **Stride-0 tricking** and **AVX2/FMA** hardware vectorization.
 
-```csharp
-using TokenVector.Numerics.Core;
+```tkv
+import tv
+from tv.core import from_array, zeros
 
-var mat = NDArray<double>.Zeros(4, 3);
-var bias = NDArray<double>.FromArray([10.0, 20.0, 30.0], 1, 3);
+mat = zeros([4, 3])
+bias = from_array([10.0, 20.0, 30.0], [1, 3])
 
-// Automatic broadcasting of bias (1, 3) across matrix (4, 3) with Stride-0 trick
-var res = mat + bias;
+# Automatic broadcasting of bias (1, 3) across matrix (4, 3) with the Stride-0 trick
+res = tv.ops.add(mat, bias)
 
-// Hardware SIMD Vector256<double> execution on contiguous memory
-var sum = res.Sum();
-var mean = res.Mean(axis: 0);
+# SIMD/AVX2 kernels execute on contiguous memory
+total = tv.ops.sum(res)
+avg = tv.ops.mean_axis(res, 0)
 ```
 
 ---
 
 ## CHAPTER 3: LINEAR ALGEBRA & MATRIX DECOMPOSITIONS (SVD, EIGEN, EINSUM, KRON)
 
-```csharp
-using TokenVector.Numerics.Core;
-using TokenVector.Numerics.LinAlg;
+```tkv
+import tv
+from tv.core import from_array
+from tv import linalg
 
-var A = NDArray<double>.FromArray([4.0, 1.0, 2.0, 1.0, 3.0, 0.0, 2.0, 0.0, 5.0], 3, 3);
-var b = NDArray<double>.FromArray([7.0, 4.0, 7.0], 3, 1);
+A = from_array([4.0, 1.0, 2.0, 1.0, 3.0, 0.0, 2.0, 0.0, 5.0], [3, 3])
+b = from_array([7.0, 4.0, 7.0], [3, 1])
 
-// 1. Solve linear system Ax = b with LU Partial Pivoting
-var x = Decomposition.Solve(A, b);
+# 1. Solve the linear system Ax = b with LU partial pivoting
+x = linalg.solve(A, b)
 
-// 2. Singular Value Decomposition: A = U * S * V^T
-var (U, S, Vt) = SVD.Decompose(A);
+# 2. Singular Value Decomposition: A = U * S * V^T
+U, S, Vt = linalg.svd(A)
 
-// 3. Eigenvalues and Eigenvectors for symmetric matrices (Eigh)
-var (eigenValues, eigenVectors) = Eigen.Eigh(A);
+# 3. Eigenvalues and eigenvectors for symmetric matrices (Eigh)
+eigen_values, eigen_vectors = linalg.eigh(A)
 
-// 4. Einstein Summation Contraction
-var C = EinSum.Evaluate("ij,jk->ik", A, A);
+# 4. Einstein summation contraction
+C = linalg.einsum("ij,jk->ik", [A, A])
 
-// 5. Kronecker Product
-var K = MatrixOps.Kron(A, NDArray<double>.Eye(2));
+# 5. Kronecker product
+K = linalg.kron(A, tv.core.eye(2))
 ```
 
 ---
 
 ## CHAPTER 4: ANALYTICAL MATRIX FUNCTIONS (PADÉ EXPM, SQRTM, SYLVESTER)
 
-```csharp
-using TokenVector.Numerics.Core;
-using TokenVector.Numerics.LinAlg;
+```tkv
+import tv
+from tv.core import from_array
+import tv.linalg_functions as lf
 
-// 1. Matrix Exponential e^A via Padé [6/6] with Scaling and Squaring
-var a = NDArray<double>.FromArray([0.0, 1.0, -1.0, 0.0], 2, 2);
-var expmA = MatrixFunctions.Expm(a); // Rotation matrix cos(1), sin(1)
+# 1. Matrix exponential e^A via Padé [6/6] with scaling and squaring
+a = from_array([0.0, 1.0, -1.0, 0.0], [2, 2])
+expm_a = lf.expm(a)  # Rotation matrix cos(1), sin(1)
 
-// 2. Matrix Square Root S = sqrt(A) such that S * S = A
-var s = MatrixFunctions.Sqrtm(a);
+# 2. Matrix square root S = sqrt(A) such that S * S = A
+s = lf.sqrtm(a)
 
-// 3. Solve Sylvester Matrix Equation: AX + XB = C
-var solX = MatrixFunctions.SolveSylvester(A, B, C);
+# 3. Solve the Sylvester matrix equation: AX + XB = C
+sol_x = lf.solve_sylvester_cm(A, B, C)
 ```
 
 ---
 
 ## CHAPTER 5: ASTRODYNAMICS & SPACE MECHANICS
 
-```csharp
-using TokenVector.Numerics.Science;
+```tkv
+import tv
+import tv.astro
 
-// 1. Solve Kepler's Equation: M = E - e*sin(E)
-double e = 0.05; // Eccentricity
-double M = 1.25; // Mean anomaly (rad)
-double E = Astrodynamics.SolveKepler(M, e);
+# 1. Solve Kepler's equation: M = E - e*sin(E)
+e = 0.05      # Eccentricity
+m_anom = 1.25 # Mean anomaly (rad)
+ecc_anom = tv.astro.solve_kepler(m_anom, e)
 
-// 2. Convert 6 Keplerian orbital elements to 3D Cartesian position (r) and velocity (v) in ECI
-var (r, v) = Astrodynamics.KeplerianToCartesian(
-    a: 7000.0, e: 0.01, i: 0.9, raan: 1.2, omega: 0.5, nu: 0.8
-);
+# 2. Convert 6 Keplerian orbital elements to 3D Cartesian position (r) and velocity (v) in ECI
+r_vec, v_vec = tv.astro.keplerian_to_cartesian(7000.0, 0.01, 0.9, 1.2, 0.5, 0.8)
 
-// 3. Calculate Hohmann Orbit Transfer (LEO to GEO)
-var (dv1, dv2, totalDv, tof) = Astrodynamics.HohmannTransfer(6678.137, 42164.0);
+# 3. Hohmann orbit transfer (LEO to GEO)
+dv1, dv2, total_dv, tof = tv.astro.hohmann_transfer(6678.137, 42164.0)
 
-// 4. Convert WGS84 Geodetic Coordinates to ECEF Cartesian
-var ecef = Astrodynamics.GeodeticToEcef(latDeg: 21.0285, lonDeg: 105.8542, altKm: 0.02);
+# 4. Convert WGS84 geodetic coordinates to ECEF Cartesian
+ecef = tv.astro.geodetic_to_ecef(21.0285, 105.8542, 0.02)
 ```
 
 ---
 
 ## CHAPTER 6: QUANTITATIVE FINANCE & OPTION PRICING (FINANCEMATH)
 
-```csharp
-using TokenVector.Numerics.Finance;
+```tkv
+import tv.finance
 
-// 1. Black-Scholes-Merton Option Pricing & The Greeks
-double callPrice = FinanceMath.BlackScholesCall(s: 100.0, k: 100.0, t: 1.0, r: 0.05, sigma: 0.20);
-double putPrice = FinanceMath.BlackScholesPut(s: 100.0, k: 100.0, t: 1.0, r: 0.05, sigma: 0.20);
+# 1. Black-Scholes-Merton option pricing & the Greeks
+call_price = tv.finance.black_scholes_call(100.0, 100.0, 1.0, 0.05, 0.20)
+put_price = tv.finance.black_scholes_put(100.0, 100.0, 1.0, 0.05, 0.20)
 
-var (delta, gamma, vega, theta, rho) = FinanceMath.OptionGreeks(100.0, 100.0, 1.0, 0.05, 0.20);
+delta, gamma, vega, theta, rho = tv.finance.option_greeks(100.0, 100.0, 1.0, 0.05, 0.20)
 
-// 2. Markowitz Modern Portfolio Theory & Sharpe Ratio
-double expReturn = FinanceMath.PortfolioReturn(weights, assetReturns);
-double expVol = FinanceMath.PortfolioVolatility(weights, covMatrix);
-double sharpe = FinanceMath.SharpeRatio(weights, assetReturns, covMatrix, riskFreeRate: 0.02);
+# 2. Markowitz modern portfolio theory & Sharpe ratio
+exp_return = tv.finance.portfolio_return(weights, asset_returns)
+exp_vol = tv.finance.portfolio_volatility(weights, cov_matrix)
+sharpe = tv.finance.sharpe_ratio(weights, asset_returns, cov_matrix, 0.02)
 
-// 3. Discounted Cash Flows: NPV and IRR
-double npv = FinanceMath.NPV(0.08, cashFlows);
-double irr = FinanceMath.IRR(cashFlows);
+# 3. Discounted cash flows: NPV and IRR
+npv_val = tv.finance.npv(0.08, cash_flows)
+irr_val = tv.finance.irr(cash_flows)
 ```
 
 ---
 
 ## CHAPTER 7: TIME SERIES FORECASTING & KALMAN FILTERING
 
-```csharp
-using TokenVector.Numerics.Statistics;
+```tkv
+import tv.core
+import tv.statistics as stats
 
-// 1. 1D Scalar Kalman Filter
-var kf = new TimeSeriesAndKalman.KalmanFilter1D(initialState: 0.0, initialVariance: 1.0, processNoise: 0.01, measurementNoise: 0.1);
-kf.Predict();
-double filteredState = kf.Update(measuredValue);
+# 1. 1D scalar Kalman filter
+kf = stats.KalmanFilter1D(0.0, 1.0, 0.01, 0.1)
+kf.predict()
+filtered_state = kf.update(measured_value)
 
-// 2. Multidimensional Kalman Filter (ND State Space)
-var kfNd = new TimeSeriesAndKalman.KalmanFilterND(x0, P0, F, H, Q, R);
-kfNd.Predict();
-var state = kfNd.Update(measurement);
+# 2. Multidimensional Kalman filter (ND state space)
+kf_nd = stats.KalmanFilterND(x0, p0, f_mat, h_mat, q_mat, r_mat)
+kf_nd.predict()
+state = kf_nd.update(measurement)
 
-// 3. Holt Linear Trend Forecasting
-var (fitted, forecast) = TimeSeriesAndKalman.HoltLinearTrend(series, alpha: 0.8, beta: 0.2, forecastSteps: 5);
+# 3. Holt linear trend forecasting
+fitted, forecast = stats.holt_linear_trend(series, 0.8, 0.2, 5)
 ```
 
 ---
 
 ## CHAPTER 8: COMPUTATIONAL PHYSICS & DIFFERENTIAL EQUATIONS (PHYSICSODEANDFIELDS)
 
-```csharp
-using TokenVector.Numerics.Core;
-using TokenVector.Numerics.Physics;
+```tkv
+import tv.core
+import tv.physics
 
-// 1. Integrate Ordinary Differential Equations via 4th-order Runge-Kutta (RK4)
-Func<double, NDArray<double>, NDArray<double>> harmonicOscillator = (t, y) =>
-    NDArray<double>.FromArray([y[1], -y[0]], 2);
+# 1. Integrate ordinary differential equations via 4th-order Runge-Kutta (RK4)
+def harmonic_oscillator(t, y):
+    return tv.core.from_array([y.get([1]), -y.get([0])], [2])
 
-var (times, trajectory) = PhysicsODEAndFields.SolveRK4(harmonicOscillator, 0.0, 10.0, y0, numSteps: 200);
+times, trajectory = tv.physics.solve_rk4(harmonic_oscillator, 0.0, 10.0, y0, 200)
 
-// 2. Gravitational N-Body dynamics via Symplectic Velocity Verlet
-var (newPos, newVel) = PhysicsODEAndFields.NBodyVerletStep(positions, velocities, masses, dt: 0.01);
+# 2. Gravitational N-body dynamics via symplectic velocity Verlet
+new_pos, new_vel = tv.physics.nbody_verlet_step(positions, velocities, masses, 0.01)
 
-// 3. 3D Vector Differential Operators
-var (gx, gy, gz) = PhysicsODEAndFields.Gradient3D(scalarField);
-var div = PhysicsODEAndFields.Divergence3D(fx, fy, fz);
-var (cx, cy, cz) = PhysicsODEAndFields.Curl3D(fx, fy, fz);
-var laplacian = PhysicsODEAndFields.Laplacian3D(scalarField);
+# 3. 3D vector differential operators
+gx, gy, gz = tv.physics.gradient_3d(scalar_field)
+div = tv.physics.divergence_3d(fx, fy, fz)
+cx, cy, cz = tv.physics.curl_3d(fx, fy, fz)
+lap = tv.physics.laplacian_3d(scalar_field)
 ```
 
 ---
 
 ## CHAPTER 9: 3D SPATIAL GEOMETRY & POINT CLOUDS (GEOMETRY3DANDPOINTCLOUDS)
 
-```csharp
-using TokenVector.Numerics.Spatial;
+```tkv
+import tv.core
+import tv.geometry3d
+import tv.spatial
 
-// 1. Point Cloud Alignment & Rigid Registration (Kabsch / ICP)
-var (rotationMatrix, translationVec) = Geometry3DAndPointClouds.AlignPointCloudsKabsch(sourceCloud, targetCloud);
+# 1. Point cloud alignment & rigid registration (Kabsch)
+rotation_matrix, translation_vec = tv.geometry3d.align_point_clouds_kabsch(source_cloud, target_cloud)
 
-// 2. Möller-Trumbore Ray-Triangle Intersection (Ray Tracing)
-var (hit, dist, u, v) = Geometry3DAndPointClouds.RayTriangleIntersect(rayOrigin, rayDir, v0, v1, v2);
+# 2. Möller-Trumbore ray-triangle intersection (ray tracing)
+has_hit, dist, u_coord, v_coord = tv.geometry3d.ray_triangle_intersect(ray_origin, ray_dir, v0, v1, v2)
 
-// 3. Point-to-Plane Distance
-double distPlane = Geometry3DAndPointClouds.PointToPlaneDistance(point, planePt, planeNormal);
+# 3. Point-to-plane distance
+dist_plane = tv.geometry3d.point_to_plane_distance(point, plane_pt, plane_normal)
 
-// 4. 4x4 Affine Transforms and Quaternions
-var transform = Affine3D.LookAt(eye, target, up);
-var q = Quaternion<double>.FromAxisAngle(axis, angleRad);
+# 4. Quaternions & 4x4 transforms
+q = tv.spatial.quaternion_from_axis_angle(ax, ay, az, angle_rad)
+transform = tv.spatial.quaternion_to_rotation_matrix_4x4(q)
 ```
 
 ---
 
 ## CHAPTER 10: SIGNAL PROCESSING & DSP FILTERING (BLUESTEIN FFT, WINDOWS)
 
-```csharp
-using TokenVector.Numerics.Core;
-using TokenVector.Numerics.LinAlg;
+```tkv
+import tv.fft
+import tv.signal
 
-// 1. Fast Fourier Transform (Bluestein Chirp-Z FFT) for arbitrary prime length N = 1009
-var signal = NDArray<double>.FromArray(rawData, 1009);
-var spectrum = FFT.FFT1D(signal); // Complex NDArray
+# 1. Fast Fourier transform (Bluestein chirp-Z FFT) for arbitrary prime length N = 1009
+spectrum = tv.fft.fft1d(raw_data)  # list of Complex in / out
 
-// 2. DSP Windowing Functions (Blackman, Hanning, Hamming)
-var win = SignalProcessing.Blackman(1024);
-var filtered = SignalProcessing.Convolve(signal, win, mode: "same");
+# 2. DSP windowing functions (Blackman, Hanning, Hamming)
+win = tv.signal.blackman(1024)
+filtered = tv.signal.convolve(signal_t, win, "same")
 ```
 
 ---
 
 ## CHAPTER 11: SPECIAL MATHEMATICAL FUNCTIONS (ERF, GAMMA, BESSEL)
 
-```csharp
-using TokenVector.Numerics.LinAlg;
+```tkv
+import tv.special
 
-double erfVal = SpecialFunctions.Erf(1.5);
-double gammaVal = SpecialFunctions.Gamma(5.0); // 4! = 24.0
-double logGamma = SpecialFunctions.LogGamma(10.0);
-double digamma = SpecialFunctions.Digamma(2.5);
-double besselJ0 = SpecialFunctions.BesselJ0(2.4048); // ~0.0 (First zero)
+erf_val = tv.special.erf_scalar(1.5)
+gamma_val = tv.special.gamma_scalar(5.0)      # 4! = 24.0
+log_gamma_val = tv.special.log_gamma_scalar(10.0)
+digamma_val = tv.special.digamma(2.5)
+bessel_j0_val = tv.special.bessel_j0_scalar(2.4048)  # ~0.0 (first zero)
 ```
 
 ---
 
 ## CHAPTER 12: POLYNOMIALS, CUMULATIVE OPS, GRIDS & SETS
 
-```csharp
-using TokenVector.Numerics.Core;
-using TokenVector.Numerics.LinAlg;
-using TokenVector.Numerics.Ops;
+```tkv
+import tv.core
+from tv.core import from_array
+import tv.compare
+import tv.grid
+import tv.poly
 
-// 1. Polynomial Fitting (PolyFit) and Root Finding (Roots)
-var x = NDArray<double>.FromArray([0, 1, 2, 3], 4);
-var y = NDArray<double>.FromArray([1, 3, 7, 13], 4);
-var coeffs = Polynomial.PolyFit(x, y, degree: 2);
-var roots = Polynomial.Roots(coeffs);
+# 1. Polynomial fitting (poly_fit) and root finding (roots)
+x = from_array([0, 1, 2, 3], [4])
+y = from_array([1, 3, 7, 13], [4])
+coeffs = tv.poly.poly_fit(x, y, 2)
+roots = tv.poly.roots(coeffs)
 
-// 2. Cumulative Operations (CumSum) and Discrete Differences (Diff)
-var cum = x.CumSum();
-var d = CumulativeOps.Diff(y, n: 1);
+# 2. Cumulative operations (cumsum) and discrete differences (diff)
+cum = tv.grid.cumsum(x)
+d = tv.grid.diff(y)
 
-// 3. Coordinate Grids (Meshgrid) and Set Operations
-var (XGrid, YGrid) = GridOps.Meshgrid(x, y);
-var common = SetOperations.Intersect1D(arr1, arr2);
+# 3. Coordinate grids (meshgrid) and set operations
+x_grid, y_grid = tv.grid.meshgrid([x, y])
+common = tv.compare.intersect1d(arr1, arr2)
 ```
 
 ---
 
 ## CHAPTER 13: AI, DEEP LEARNING & TRANSFORMER KERNELS (NEURAL)
 
-```csharp
-using TokenVector.Numerics.Neural;
+```tkv
+import tv.core
+import tv.neural
 
-// 1. Rotary Positional Embedding (RoPE) for LLMs (Llama 3 / Mistral)
-var ropeQ = AttentionEngine.ApplyRoPE(qTensor, cosCache, sinCache);
+# 1. Rotary positional embedding (RoPE) for LLMs (Llama 3 / Mistral)
+rope_q = tv.neural.apply_rope(q_tensor, 0, 10000.0)
 
-// 2. Scaled Dot-Product Attention (FlashAttention compatible)
-var attnOut = AttentionEngine.ScaledDotProductAttention(Q, K, V, mask: causalMask);
+# 2. Scaled dot-product attention (FlashAttention compatible)
+attn_out, attn_weights = tv.neural.scaled_dot_product_attention(q, k, v, causal_mask)
 
-// 3. RMSNorm & Sinkhorn Optimal Transport
-var normed = Normalization.RMSNorm(hiddenStates, weightGamma);
-var distW = OptimalTransportAndDiffusion.Sinkhorn(sourceDist, targetDist, costMatrix, reg: 0.1);
+# 3. RMSNorm & Sinkhorn optimal transport
+normed = tv.neural.rms_norm(hidden_states, weight_gamma)
+dist_w, plan = tv.neural.sinkhorn(source_dist, target_dist, cost_matrix, 0.1)
 ```
 
 ---
@@ -307,49 +315,47 @@ var distW = OptimalTransportAndDiffusion.Sinkhorn(sourceDist, targetDist, costMa
 
 The **Autograd Engine** constructs a Dynamic Directed Acyclic Graph (DAG) and calculates exact gradients via Reverse-Mode Backpropagation.
 
-```csharp
-using TokenVector.Numerics.Autograd;
-using TokenVector.Numerics.Autograd.NN;
-using TokenVector.Numerics.Autograd.Optim;
-using TokenVector.Numerics.Autograd.Nodes;
+```tkv
+import tv.core
+from tv.core import from_array
+import tv.autograd as ag
 
-// 1. Scalar Arithmetic Autograd
-var x = new Tensor<double>(3.0, requiresGrad: true);
-var y = new Tensor<double>(2.0, requiresGrad: true);
-var z = (x + y) * (x - y); // z = x^2 - y^2
-z.Backward();
+# 1. Scalar arithmetic autograd
+x = ag.Tensor.full(3.0, [1])
+x.requires_grad = True
+y = ag.Tensor.full(2.0, [1])
+y.requires_grad = True
+z = (x + y) * (x - y)  # z = x^2 - y^2
+z.backward()
 
-Console.WriteLine($"dz/dx = {x.Grad!.Buffer[0]}"); // 6.0 (2*x)
-Console.WriteLine($"dz/dy = {y.Grad!.Buffer[0]}"); // -4.0 (-2*y)
+print(x.grad.get([0]))  # dz/dx = 6.0 (2*x)
+print(y.grad.get([0]))  # dz/dy = -4.0 (-2*y)
 
-// 2. Matrix Multiplication & Automatic Unbroadcasting
-var X = new Tensor<double>(new double[] { 1, 2, 3, 4 }, new[] { 2, 2 }, requiresGrad: true);
-var W = new Tensor<double>(new double[] { 0.5, -0.5, 1.0, 2.0 }, new[] { 2, 2 }, requiresGrad: true);
-var b = new Tensor<double>(new double[] { 0.1, 0.2 }, new[] { 1, 2 }, requiresGrad: true);
+# 2. Matrix multiplication & automatic unbroadcasting
+x_mat = ag.Tensor.from_ndarray(from_array([1, 2, 3, 4], [2, 2]), requires_grad=True)
+w_mat = ag.Tensor.from_ndarray(from_array([0.5, -0.5, 1.0, 2.0], [2, 2]), requires_grad=True)
+b_vec = ag.Tensor.from_ndarray(from_array([0.1, 0.2], [1, 2]), requires_grad=True)
 
-var Y = X.MatMul(W) + b;
-var loss = Y.Sum();
-loss.Backward(); // Automatically unbroadcasts bias gradient to [1, 2]
+y_mat = x_mat.matmul(w_mat) + b_vec
+loss = y_mat.sum()
+loss.backward()  # Automatically unbroadcasts the bias gradient to [1, 2]
 
-// 3. Train a Multi-Layer Perceptron (MLP) with AdamW
-var inputs = new Tensor<double>(new double[] { 0,0, 0,1, 1,0, 1,1 }, new[] { 4, 2 });
-var targets = new Tensor<double>(new double[] { 0, 1, 1, 0 }, new[] { 4, 1 });
+# 3. Train a multi-layer perceptron (MLP) with AdamW
+inputs = ag.Tensor.from_ndarray(from_array([0, 0, 0, 1, 1, 0, 1, 1], [4, 2]))
+targets = ag.Tensor.from_ndarray(from_array([0, 1, 1, 0], [4, 1]))
 
-var l1 = new Linear<double>(inFeatures: 2, outFeatures: 8);
-var l2 = new Linear<double>(inFeatures: 8, outFeatures: 1);
-var model = new Sequential<double>(l1, l2);
-var optimizer = new AdamW<double>(model.Parameters(), lr: 0.1);
+model = ag.Sequential([ag.Linear(2, 8), ag.Linear(8, 1)])
+optimizer = ag.AdamW(model.parameters(), lr=0.1)
 
-for (int epoch = 0; epoch < 200; epoch++)
-{
-    optimizer.ZeroGrad();
-    var h = l1.Forward(inputs).Tanh();
-    var preds = l2.Forward(h).Sigmoid();
-    var mse = ActivationAndReductionNodes<double>.MSELoss(preds, targets);
-    
-    mse.Backward();
-    optimizer.Step();
-}
+epoch = 0
+while epoch < 200:
+    optimizer.zero_grad()
+    h = ag.tanh(model.modules[0].forward(inputs))
+    preds = ag.sigmoid(model.modules[1].forward(h))
+    mse = ag.mse_loss(preds, targets)
+    mse.backward()
+    optimizer.step()
+    epoch = epoch + 1
 ```
 
 ---
@@ -401,7 +407,7 @@ python tests/tokenvector/benchmark_vs_numpy.py
 
 ### 15.4 Quick Start in TokenVector
 
-```tokenvector
+```tkv
 import tv
 from tv.core import from_array
 from tv import linalg

@@ -120,29 +120,27 @@ Benchmarked on **AMD Ryzen / Intel x86_64** (Release build, .NET 8 LTS, Native S
 
 ## 🚀 Quick Start & Usage
 
-```csharp
-using TokenVector.Numerics.Core;
-using TokenVector.Numerics.Autograd;
-using TokenVector.Numerics.Autograd.NN;
-using TokenVector.Numerics.Autograd.Optim;
+```tkv
+import tv
+from tv.core import from_array
+import tv.autograd as ag
 
-// 1. Zero-copy Multidimensional Tensor Slicing & Broadcasting
-var a = NDArray<double>.FromArray([1, 2, 3, 4, 5, 6], 2, 3);
-var b = NDArray<double>.FromArray([10, 20, 30], 1, 3);
-var c = a + b; // Stride-0 Broadcasting -> [2, 3]
+# 1. Zero-copy multidimensional tensor slicing & broadcasting
+a = from_array([1, 2, 3, 4, 5, 6], [2, 3])
+b = from_array([10, 20, 30], [1, 3])
+c = tv.ops.add(a, b)                     # Stride-0 broadcasting -> [2, 3]
+view = a.slice([[0, 2, 1], [1, 3, 1]])   # zero-copy view ~ a[0:2, 1:3]
 
-// 2. Dynamic Compute Graph Autograd
-var x = new Tensor<double>(3.0, requiresGrad: true);
-var y = (x * x) + (2.0 * x) + 1.0;
-y.Backward();
-Console.WriteLine(x.Grad!.Buffer[0]); // dy/dx = 2*3 + 2 = 8.0
+# 2. Dynamic compute graph autograd
+x = ag.Tensor.full(3.0, [1])
+x.requires_grad = True
+y = (x * x) + (2.0 * x) + 1.0
+y.backward()
+print(x.grad.get([0]))                   # dy/dx = 2*3 + 2 = 8.0
 
-// 3. Train a Multi-Layer Perceptron (MLP)
-var model = new Sequential<double>(
-    new Linear<double>(inFeatures: 2, outFeatures: 8),
-    new Linear<double>(inFeatures: 8, outFeatures: 1)
-);
-var optimizer = new AdamW<double>(model.Parameters(), lr: 0.05);
+# 3. Train a multi-layer perceptron (MLP)
+model = ag.Sequential([ag.Linear(2, 8), ag.Linear(8, 1)])
+optimizer = ag.AdamW(model.parameters(), lr=0.05)
 ```
 
 ---
