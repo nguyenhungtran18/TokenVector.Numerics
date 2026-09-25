@@ -3,9 +3,9 @@
 
 [ 🇬🇧 English ](TEST_REPORT.md) | [ 🇻🇳 Tiếng Việt ](TEST_REPORT_VI.md)
 
-**Mã báo cáo:** TR-TKV-NUMERICS-2026-V1.1.0-FINAL (TOKENVECTOR STDLIB & NUMPY-PARITY EDITION)  
-**Ngày thực hiện:** 24/09/2026  
-**Phiên bản mục tiêu:** `v1.1.0`  
+**Mã báo cáo:** TR-TKV-NUMERICS-2026-V1.1.1 (TOKENVECTOR STDLIB, MATHLIB & NUMPY-PARITY EDITION)  
+**Ngày thực hiện:** 24/09/2026 (lần chạy v1.1.0) · 25/09/2026 (kiểm chứng lại mathlib cho v1.1.1)  
+**Phiên bản mục tiêu:** `v1.1.1` (Mục 3–4); Mục 2 là log chạy của `v1.1.0`  
 **Môi trường thử nghiệm:** .NET SDK 8.0 LTS, Release Configuration, x64 Architecture, Windows OS  
 **Khung kiểm thử:** xUnit.net v2.5.3, Microsoft.NET.Test.Sdk v17.8.0 + native `tkvc.exe` (compile `smoke_tests.tkv`)  
 **Trạng thái kiểm thử:** **100% PASSED (84/84 xUnit in ~179 ms · 175/175 .tkv smoke · 354/354 numeric surface)**  
@@ -198,5 +198,5 @@ tkvc build tests/tokenvector/smoke_tests.tkv --entry main --out smoke.exe
 
 Nguyên nhân gốc: `tkvc build` phân giải `import tv` theo thư mục đi kèm của chính nó (đường dẫn giải nén PyInstaller), chứ không phải `src/tokenvector` của repository, và không có tuỳ chọn runtime-path — dạng lệnh `-r src/tokenvector` nêu trong phần đầu `smoke_tests.tkv` bị từ chối thẳng (`invalid choice`, lệnh con duy nhất là `build`). Một probe tối giản import `tv` xác nhận độc lập điều này: `import module 'tv' khong tim thay trong thu muc hien tai hoi site-packages`.
 
-Vì vậy **con số 175/175 nên được đọc là kết quả lưu của bản phát hành v1.1.0**, không phải một cổng kiểm chứng đang hoạt động. Bài kiểm tra tái lập được ngày hôm nay là hai suite `mathlib` ở Mục 3.1. Job CI `verify-stdlib` hiện không đỏ vì lý do này — nó bỏ qua khi máy chủ không có `tkvc` — nhưng cũng không thể dùng làm bằng chứng cho tới khi compiler hỗ trợ runtime-path.
+Vì vậy **con số 175/175 nên được đọc là kết quả lưu của bản phát hành v1.1.0**, không phải một cổng kiểm chứng đang hoạt động. Bài kiểm tra tái lập được ngày hôm nay là hai suite `mathlib` ở Mục 3.1, và CI nay chạy đúng hai suite đó (`verify-mathlib`) thay cho smoke suite. Smoke suite không được nối vào CI vì sẽ hỏng trên mọi runner với lý do nêu trên; nên bật lại khi compiler resolve được stdlib từ thư mục dự án.
 

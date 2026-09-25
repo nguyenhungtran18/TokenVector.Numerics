@@ -17,7 +17,7 @@ TokenVector.Numerics is the numerics runtime of the [TokenVector](https://github
 
 ## Language Specification
 
-- [TokenVector Syntax Spec (English)](TOKENVECTOR_SYNTAX_SPEC.md): formal TV-1001 grammar — `import tv`, `tv.array/tensor`, `tv.linalg/autograd/nn/optim`, `tkvc main.tkv -r TokenVector.Numerics.dll -o app.exe`
+- [TokenVector Syntax Spec (English)](TOKENVECTOR_SYNTAX_SPEC.md): formal TV-1001 grammar — `import tv`, `from tv.core import from_array`, `tv.linalg`, `tv.autograd`, `tv.neural`, `tv.optimize`; compile with `tkvc build main.tkv --out app.exe` (`build` is the only subcommand; there is no `-r`/`-o` flag)
 - [TokenVector Syntax Spec (Tiếng Việt)](TOKENVECTOR_SYNTAX_SPEC_VI.md): bản tiếng Việt của đặc tả ngữ pháp
 
 ## TokenVector Standard Library (.tkv)
@@ -35,7 +35,7 @@ Reproducible today (re-run September 25, 2026):
 
 Not currently reproducible — known limitation:
 
-- [Smoke suite](tests/tokenvector/smoke_tests.tkv): the documented `tkvc build tests/tokenvector/smoke_tests.tkv --entry main --out smoke.exe` **fails** on current `tkvc` builds with `File khong co ham top-level nao co annotation kieu DSL`. Root cause: `tkvc build` resolves `import tv` against its own bundled directory and exposes no runtime-path flag (the `-r src/tokenvector` form in the file header is rejected). The **175/175** figure is therefore the **v1.1.0 release record**, not a live gate. CI job `verify-stdlib` short-circuits when `tkvc` is absent, so it is not currently red, but it is not evidence either.
+- [Smoke suite](tests/tokenvector/smoke_tests.tkv): the documented `tkvc build tests/tokenvector/smoke_tests.tkv --entry main --out smoke.exe` **fails** on current `tkvc` builds with `File khong co ham top-level nao co annotation kieu DSL`. Root cause: `tkvc build` resolves `import tv` against its own bundled directory and exposes no runtime-path flag (the `-r src/tokenvector` form in the file header is rejected). The **175/175** figure is therefore the **v1.1.0 release record**, not a live gate. CI runs the two `mathlib` suites instead (`verify-mathlib`); the smoke suite is excluded until stdlib resolution is fixed.
 
 Other evidence:
 

@@ -15,7 +15,7 @@
 
 [![.NET 8](https://img.shields.io/badge/.NET-8.0%20LTS-purple.svg)](https://dotnet.microsoft.com/)
 [![CI / CD](https://github.com/nguyenhungtran18/TokenVector.Numerics/actions/workflows/ci.yml/badge.svg)](https://github.com/nguyenhungtran18/TokenVector.Numerics/actions)
-[![NuGet](https://img.shields.io/badge/NuGet-v1.1.0-blue.svg)](https://github.com/nguyenhungtran18/TokenVector.Numerics/packages)
+[![NuGet](https://img.shields.io/badge/NuGet-v1.1.1-blue.svg)](https://github.com/nguyenhungtran18/TokenVector.Numerics/packages)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Tests](https://img.shields.io/badge/Tests-84%2F84%20Passed-brightgreen.svg)]()
 [![TokenVector stdlib](https://img.shields.io/badge/.tkv%20stdlib-100%25%20numeric%20surface-9cf.svg)](src/tokenvector/README.md)
@@ -171,7 +171,7 @@ optimizer = ag.AdamW(model.parameters(), lr=0.05)
 
 ## 🛠️ Compiling with TokenVector Language (`tkvc.exe`)
 
-To compile native TokenVector (`.tkv` / `.tv`) programs using `TokenVector.Numerics.dll`:
+To compile native TokenVector (`.tkv` / `.tv`) programs:
 
 1. **Clone the official TokenVector repository** to obtain `tkvc.exe` and standard libraries (`stdlib`):
    ```powershell
@@ -179,16 +179,18 @@ To compile native TokenVector (`.tkv` / `.tv`) programs using `TokenVector.Numer
    ```
 2. **Compile your TokenVector program** into a standalone native executable:
    ```powershell
-   ./tkvc.exe main.tkv -r TokenVector.Numerics.dll -o app.exe
+   ./tkvc.exe build main.tkv --out app.exe
    ```
 3. **Execute the compiled binary**:
    ```powershell
    ./app.exe
    ```
 
+`build` is the only subcommand; see the [syntax specification](TOKENVECTOR_SYNTAX_SPEC.md) §7 for all flags.
+
 ---
 
-For comprehensive documentation across all 34 mathematical categories and language grammar, check:
+For comprehensive documentation across all 35 mathematical categories and language grammar, check:
 * 📖 [User Guide (English)](USER_GUIDE.md) | [Hướng dẫn sử dụng (Tiếng Việt)](USER_GUIDE_VI.md)
 * 📐 [TokenVector Syntax Specification](TOKENVECTOR_SYNTAX_SPEC.md) | [Đặc tả cú pháp TokenVector](TOKENVECTOR_SYNTAX_SPEC_VI.md)
 * 🏛️ [TokenVector Official Compiler Repository](https://github.com/nguyenhungtran18/TokenVector)

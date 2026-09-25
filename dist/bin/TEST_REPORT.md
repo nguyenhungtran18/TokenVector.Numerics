@@ -3,9 +3,9 @@
 
 [ 🇬🇧 English ](TEST_REPORT.md) | [ 🇻🇳 Tiếng Việt ](TEST_REPORT_VI.md)
 
-**Report ID:** TR-TKV-NUMERICS-2026-V1.1.0-FINAL (TOKENVECTOR STDLIB & NUMPY-PARITY EDITION)  
-**Execution Date:** September 24, 2026  
-**Target Version:** `v1.1.0`  
+**Report ID:** TR-TKV-NUMERICS-2026-V1.1.1 (TOKENVECTOR STDLIB, MATHLIB & NUMPY-PARITY EDITION)  
+**Execution Date:** September 24, 2026 (v1.1.0 run) · September 25, 2026 (v1.1.1 mathlib re-verification)  
+**Target Version:** `v1.1.1` (Sections 3–4); Section 2 is the `v1.1.0` run log  
 **Test Environment:** .NET SDK 8.0 LTS, Release Configuration, x64 Architecture, Windows OS  
 **Test Framework:** xUnit.net v2.5.3, Microsoft.NET.Test.Sdk v17.8.0 + native `tkvc.exe` (compiled `smoke_tests.tkv`)  
 **Status:** **100% PASSED (84/84 xUnit in ~179 ms · 175/175 .tkv smoke · 354/354 numeric surface)**
@@ -198,5 +198,5 @@ tkvc build tests/tokenvector/smoke_tests.tkv --entry main --out smoke.exe
 
 Root cause: `tkvc build` resolves `import tv` against its own bundled directory (a PyInstaller extraction path), not the repository's `src/tokenvector`, and exposes no runtime-path flag — the `-r src/tokenvector` invocation form referenced in the `smoke_tests.tkv` header is rejected outright (`invalid choice`, the only subcommand is `build`). A minimal probe importing `tv` confirms it independently: `import module 'tv' khong tim thay trong thu muc hien tai hoi site-packages`.
 
-Consequently the **175/175 figure should be read as the v1.1.0 release record**, not a live gate. The reproducible check today is the pair of `mathlib` suites in Section 3.1. The CI job `verify-stdlib` is not currently red for this reason — it short-circuits when `tkvc` is absent from the runner — but it also cannot be relied on as evidence until the compiler exposes a runtime-path option.
+Consequently the **175/175 figure should be read as the v1.1.0 release record**, not a live gate. The reproducible check today is the pair of `mathlib` suites in Section 3.1, and CI now runs exactly those two suites (`verify-mathlib`) instead of the smoke suite. The smoke suite is not wired into CI because it would fail on every runner for the reason above; it should be re-enabled once the compiler can resolve the stdlib from a project directory.
 

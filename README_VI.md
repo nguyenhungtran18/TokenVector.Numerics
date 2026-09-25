@@ -15,7 +15,7 @@
 
 [![.NET 8](https://img.shields.io/badge/.NET-8.0%20LTS-purple.svg)](https://dotnet.microsoft.com/)
 [![CI / CD](https://github.com/nguyenhungtran18/TokenVector.Numerics/actions/workflows/ci.yml/badge.svg)](https://github.com/nguyenhungtran18/TokenVector.Numerics/actions)
-[![NuGet](https://img.shields.io/badge/NuGet-v1.1.0-blue.svg)](https://github.com/nguyenhungtran18/TokenVector.Numerics/packages)
+[![NuGet](https://img.shields.io/badge/NuGet-v1.1.1-blue.svg)](https://github.com/nguyenhungtran18/TokenVector.Numerics/packages)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Tests](https://img.shields.io/badge/Tests-84%2F84%20Passed-brightgreen.svg)]()
 [![TokenVector stdlib](https://img.shields.io/badge/.tkv%20stdlib-100%25%20numeric%20surface-9cf.svg)](src/tokenvector/README.md)
@@ -171,7 +171,7 @@ optimizer = ag.AdamW(model.parameters(), lr=0.05)
 
 ## 🛠️ Biên Dịch Với Ngôn Ngữ TokenVector (`tkvc.exe`)
 
-Để biên dịch ứng dụng viết bằng ngôn ngữ TokenVector (`.tkv` / `.tv`) liên kết với thư viện `TokenVector.Numerics.dll`:
+Để biên dịch ứng dụng viết bằng ngôn ngữ TokenVector (`.tkv` / `.tv`):
 
 1. **Clone repository chính thức của TokenVector** để lấy trình biên dịch `tkvc.exe` và thư viện chuẩn (`stdlib`):
    ```powershell
@@ -179,16 +179,18 @@ optimizer = ag.AdamW(model.parameters(), lr=0.05)
    ```
 2. **Biên dịch chương trình TokenVector** thành file thực thi `.exe` độc lập:
    ```powershell
-   ./tkvc.exe main.tkv -r TokenVector.Numerics.dll -o app.exe
+   ./tkvc.exe build main.tkv --out app.exe
    ```
 3. **Chạy ứng dụng native trực tiếp**:
    ```powershell
    ./app.exe
    ```
 
+`build` là lệnh con duy nhất; xem [đặc tả cú pháp](TOKENVECTOR_SYNTAX_SPEC_VI.md) §7 để biết toàn bộ tuỳ chọn.
+
 ---
 
-Để xem toàn bộ tài liệu chi tiết 34 chuyên ngành toán học và cú pháp ngữ pháp ngôn ngữ, tham khảo:
+Để xem toàn bộ tài liệu chi tiết 35 chuyên ngành toán học và cú pháp ngữ pháp ngôn ngữ, tham khảo:
 * 📖 [User Guide (English)](USER_GUIDE.md) | [Sổ tay hướng dẫn sử dụng (Tiếng Việt)](USER_GUIDE_VI.md)
 * 📐 [TokenVector Syntax Specification](TOKENVECTOR_SYNTAX_SPEC.md) | [Đặc tả cú pháp TokenVector](TOKENVECTOR_SYNTAX_SPEC_VI.md)
 * 🏛️ [Repository Trình Biên Dịch TokenVector Chính Thức](https://github.com/nguyenhungtran18/TokenVector)
