@@ -63,10 +63,16 @@ jobs:
             throw ("downloaded tkvc.exe is not a PE binary (first bytes: 0x{0:X2}{1:X2})" -f $buf[0], $buf[1])
           }
 
-          New-Item -ItemType Directory -Force -Path ./.bin | Out-Null
-          Copy-Item $exe.FullName -Destination "./bin/tkvc.exe" -Force
-          Add-Content -Path $env:GITHUB_PATH -Value "$PWD/.bin"
-          Write-Host "tkvc.exe ready: $($exe.FullName)"
+          # Install into a single well-defined directory outside the checkout.
+          # Keep the three paths in step: creating .bin but copying into bin is
+          # what made the first version fail after the URL was fixed.
+          $bindir = Join-Path $env:RUNNER_TEMP "tkvc-bin"
+          New-Item -ItemType Directory -Force -Path $bindir | Out-Null
+          $installed = Join-Path $bindir "tkvc.exe"
+          Copy-Item $exe.FullName -Destination $installed -Force
+          if (-not (Test-Path $installed)) { throw "tkvc.exe was not installed to $installed" }
+          Add-Content -Path $env:GITHUB_PATH -Value $bindir
+          Write-Host "tkvc.exe installed: $installed"
 
           "compiler_ready=true" | Out-File -FilePath $env:GITHUB_ENV -Append
         }
@@ -82,9 +88,18 @@ jobs:
         "gate_skipped=true" | Out-File -FilePath $env:GITHUB_ENV -Append
 
         if ($env:compiler_ready -ne "true") {
-          Write-Warning "tkvc could not be fetched - the mathlib gate is SKIPPED, not passed."
+          Write-Warning "tkvc could not be fetched or installed - the mathlib gate is SKIPPED, not passed."
           exit 0
         }
+
+        # Distinguish "not installed" from "installed but too old". Reporting a
+        # missing compiler as a version problem hides the real failure.
+        $tkvc = Get-Command tkvc -ErrorAction SilentlyContinue
+        if (-not $tkvc) {
+          Write-Warning "tkvc was reported as installed but is not on PATH - the mathlib gate is SKIPPED, not passed."
+          exit 0
+        }
+        Write-Host "tkvc resolved to: $($tkvc.Source)"
 
         # Capability probe. The currently published build predates the work that
         # makes mathlib compilable: it exposes only `build [--entry] [--out]`
