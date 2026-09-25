@@ -35,23 +35,25 @@ import tv.geometry3d
 import tv.crypto_graph
 import tv.biology_robotics as bio
 
-_PASSED = [0]
-_FAILED = [0]
+_PASSED: "i32" = 0
+_FAILED: "i32" = 0
 
-def check(name, condition):
+def check(name: "str", condition: "bool") -> "i32":
     if condition:
-        _PASSED[0] = _PASSED[0] + 1
+        _PASSED = _PASSED + 1
     else:
-        _FAILED[0] = _FAILED[0] + 1
+        _FAILED = _FAILED + 1
         print("FAIL: " + name)
+    return 0
 
-def check_close(name, actual, expected, tol=1e-9):
+def check_close(name: "str", actual: "f64", expected: "f64", tol: "f64" = 0.000000001) -> "i32":
     diff = actual - expected
     if diff < 0.0:
         diff = -diff
     check(name, diff <= tol)
+    return 0
 
-def run_core_tests():
+def run_core_tests() -> "i32":
     a = from_array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], [2, 3])
     b = from_array([10.0, 20.0, 30.0], [1, 3])
     c = tv.ops.add(a, b)  # broadcast [2,3] + [1,3]
@@ -74,8 +76,9 @@ def run_core_tests():
     gt = tv.compare.greater_than_scalar(a, 3.0)
     filtered = tv.grid.filter(a, gt)
     check("core.mask_filter", filtered.total_length == 3)
+    return 0
 
-def run_linalg_tests():
+def run_linalg_tests() -> "i32":
     a = from_array([4.0, 1.0, 1.0, 3.0], [2, 2])
     b = from_array([2.0, 0.0, 0.0, 5.0], [2, 2])
     c = linalg.matmul(a, b)
@@ -92,29 +95,29 @@ def run_linalg_tests():
     lhs = from_array([2.0, 1.0, 1.0, 3.0], [2, 2])
     rhs = from_array([3.0, 5.0], [2])
     x = linalg.solve(lhs, rhs)
-    check_close("linalg.solve", x.get([0]), 0.8, 1e-9)
+    check_close("linalg.solve", x.get([0]), 0.8, 0.000000001)
     # Inverse
     inv = linalg.inverse(lhs)
-    check_close("linalg.inverse", inv.get([0, 0]), 0.6, 1e-9)
+    check_close("linalg.inverse", inv.get([0, 0]), 0.6, 0.000000001)
     # Determinant & trace
-    check_close("linalg.det", linalg.det(lhs), 5.0, 1e-9)
-    check_close("linalg.trace", linalg.trace(lhs), 5.0, 1e-12)
+    check_close("linalg.det", linalg.det(lhs), 5.0, 0.000000001)
+    check_close("linalg.trace", linalg.trace(lhs), 5.0, 0.000000000001)
     # QR: A = QR
     q, r = linalg.qr(lhs)
     qr_prod = linalg.matmul(q, r)
-    check_close("linalg.qr", qr_prod.get([0, 0]), 2.0, 1e-9)
+    check_close("linalg.qr", qr_prod.get([0, 0]), 2.0, 0.000000001)
     # Cholesky of SPD matrix
     spd = from_array([4.0, 2.0, 2.0, 3.0], [2, 2])
     l_mat = linalg.cholesky(spd)
-    check_close("linalg.cholesky", l_mat.get([0, 0]), 2.0, 1e-9)
+    check_close("linalg.cholesky", l_mat.get([0, 0]), 2.0, 0.000000001)
     # Eigh of symmetric matrix: eigenvalues {1, 3}
     sym = from_array([2.0, 1.0, 1.0, 2.0], [2, 2])
     eigvals, eigvecs = linalg.eigh(sym)
-    check_close("linalg.eigh_min", eigvals.get([0]), 1.0, 1e-6)
-    check_close("linalg.eigh_max", eigvals.get([1]), 3.0, 1e-6)
+    check_close("linalg.eigh_min", eigvals.get([0]), 1.0, 0.000001)
+    check_close("linalg.eigh_max", eigvals.get([1]), 3.0, 0.000001)
     # SVD
     u, s, vt = linalg.svd(from_array([3.0, 0.0, 0.0, 2.0], [2, 2]))
-    check_close("linalg.svd", s.get([0]), 3.0, 1e-6)
+    check_close("linalg.svd", s.get([0]), 3.0, 0.000001)
     # Einsum "ij,jk->ik" equals matmul
     ein = linalg.einsum("ij,jk->ik", [a, b])
     check_close("linalg.einsum", ein.get([1, 1]), 15.0)
@@ -124,18 +127,19 @@ def run_linalg_tests():
     # expm of zero matrix = identity
     z2 = zeros([2, 2])
     ez = lf.expm(z2)
-    check_close("linalg.expm_zero", ez.get([1, 1]), 1.0, 1e-9)
+    check_close("linalg.expm_zero", ez.get([1, 1]), 1.0, 0.000000001)
     # Norm
-    check_close("linalg.norm", linalg.norm(a, "fro"), tv.sqrt(27.0), 1e-9)
+    check_close("linalg.norm", linalg.norm(a, "fro"), tv.sqrt(27.0), 0.000000001)
     # Thomas tridiagonal solve: x = [1, 1, 1]
     x_t = lf.solve_band_tridiagonal(
         from_array([1.0, 1.0], [2]),
         from_array([3.0, 4.0, 3.0], [3]),
         from_array([1.0, 1.0], [2]),
         from_array([4.0, 6.0, 4.0], [3]))
-    check_close("linalg.thomas", x_t.get([0]), 1.0, 1e-9)
+    check_close("linalg.thomas", x_t.get([0]), 1.0, 0.000000001)
+    return 0
 
-def run_ops_tests():
+def run_ops_tests() -> "i32":
     a = from_array([1.0, 2.0, 3.0, 4.0], [2, 2])
     check_close("ops.sum", tv.ops.sum(a), 10.0)
     check_close("ops.mean", tv.ops.mean(a), 2.5)
@@ -241,21 +245,22 @@ def run_ops_tests():
     check("grid.tril_indices", tl_idx.shape[1] == 6 and tl_idx.get([0, 5]) == 2.0 and tl_idx.get([1, 5]) == 2.0)
     di = tv.grid.diagflat(from_array([1.0, 2.0], [2]), 0)
     check("grid.diagflat", di.get([0, 0]) == 1.0 and di.get([1, 1]) == 2.0 and di.get([0, 1]) == 0.0)
+    return 0
 
-def gt_scalar_mask():
+def gt_scalar_mask() -> "NDArray":
     from tv.core import from_array
     return tv.compare.greater_than_scalar(from_array([0.0, 1.0], [2]), 0.5)
 
-def run_fft_signal_tests():
+def run_fft_signal_tests() -> "i32":
     # FFT of constant signal: only DC bin nonzero
     from tv.linalg_functions import Complex
     sig = [Complex(1.0, 0.0), Complex(1.0, 0.0), Complex(1.0, 0.0), Complex(1.0, 0.0)]
     out = tv.fft.fft1d(sig)
     check_close("fft.dc_bin", out[0].real, 4.0)
-    check_close("fft.other_bins", out[1].real, 0.0, 1e-9)
+    check_close("fft.other_bins", out[1].real, 0.0, 0.000000001)
     # Inverse round-trip
     back = tv.fft.ifft1d(out)
-    check_close("fft.ifft_roundtrip", back[2].real, 1.0, 1e-9)
+    check_close("fft.ifft_roundtrip", back[2].real, 1.0, 0.000000001)
     # Bluestein arbitrary length (N=5): DFT of unit impulse at n=1 has |X[k]| = 1
     sig5 = [Complex(0.0, 0.0), Complex(1.0, 0.0), Complex(0.0, 0.0), Complex(0.0, 0.0), Complex(0.0, 0.0)]
     out5 = tv.fft.fft1d(sig5)
@@ -265,7 +270,7 @@ def run_fft_signal_tests():
         diff = mag_sq - 1.0
         if diff < 0.0:
             diff = -diff
-        if diff > 1e-9:
+        if diff > 0.000000001:
             all_close = False
     check("fft.bluestein_impulse", all_close)
     # Convolution [1,2] * [1,1] = [1,3,2]
@@ -278,12 +283,12 @@ def run_fft_signal_tests():
     sig2 = from_array([1.0, 2.0, 3.0, 4.0], [4])
     c_a, c_d = tv.signal.dwt(sig2, "haar")
     rec = tv.signal.idwt(c_a, c_d, "haar")
-    check_close("signal.dwt_idwt", rec.get([3]), 4.0, 1e-12)
+    check_close("signal.dwt_idwt", rec.get([3]), 4.0, 0.000000000001)
     # Special functions
     check_close("special.erf", tv.special.erf_scalar(0.0), 0.0)
     # Lanczos (g=7) carries ~2e-9 absolute error at z=5; the xUnit suite
-    # verifies Gamma(5) with a 1e-6 tolerance.
-    check_close("special.gamma", tv.special.gamma_scalar(5.0), 24.0, 1e-6)
+    # verifies Gamma(5) with a 0.000001 tolerance.
+    check_close("special.gamma", tv.special.gamma_scalar(5.0), 24.0, 0.000001)
     check_close("special.sinc", tv.special.sinc(0.0), 1.0)
     check_close("special.sigmoid_expit", tv.special.expit(0.0), 0.5)
     # --- NumPy gap-fill: ops/scalar math ---
@@ -293,11 +298,11 @@ def run_fft_signal_tests():
     check_close("ops.gcd_lcm", tv.ops.gcd(from_array([12.0], [1]), from_array([18.0], [1])).get([0]), 6.0)
     check_close("ops.lcm", tv.ops.lcm(from_array([4.0], [1]), from_array([6.0], [1])).get([0]), 12.0)
     fr = tv.ops.frexp(from_array([8.0], [1]))
-    check_close("ops.frexp", fr[0].get([0]), 0.5, 1e-12)
+    check_close("ops.frexp", fr[0].get([0]), 0.5, 0.000000000001)
     check("ops.frexp_ldexp_roundtrip", tv.ops.ldexp(fr[0], fr[1]).get([0]) == 8.0)
     mf = tv.ops.modf(from_array([3.75], [1]))
-    check_close("ops.modf", mf[0].get([0]), 0.75, 1e-12)
-    check_close("ops.modf_int", mf[1].get([0]), 3.0, 1e-12)
+    check_close("ops.modf", mf[0].get([0]), 0.75, 0.000000000001)
+    check_close("ops.modf_int", mf[1].get([0]), 3.0, 0.000000000001)
     na = tv.ops.nextafter(from_array([1.0], [1]), from_array([2.0], [1]))
     check("ops.nextafter", na.get([0]) > 1.0 and na.get([0]) < 1.000000000000001)
     ntn = tv.ops.nan_to_num(from_array([1.0], [1]))
@@ -308,10 +313,10 @@ def run_fft_signal_tests():
     check_close("ops.floor_divide", tv.ops.floor_divide(from_array([7.0], [1]), from_array([2.0], [1])).get([0]), 3.0)
     check_close("ops.heaviside", tv.ops.heaviside(from_array([0.0], [1]), from_array([0.5], [1])).get([0]), 0.5)
     check_close("core.empty_zeros", tv.core.empty([2, 2]).total_length, 4.0)
-    check_close("core.logspace", tv.core.logspace(0.0, 3.0, 4).get([3]), 1000.0, 1e-9)
-    check_close("core.geomspace", tv.core.geomspace(1.0, 1000.0, 4).get([2]), 100.0, 1e-9)
+    check_close("core.logspace", tv.core.logspace(0.0, 3.0, 4).get([3]), 1000.0, 0.000000001)
+    check_close("core.geomspace", tv.core.geomspace(1.0, 1000.0, 4).get([2]), 100.0, 0.000000001)
     eul = tv.special.euler_gamma(from_array([1.0], [1]))
-    check_close("special.euler_gamma", eul.get([0]), 0.5772156649015329, 1e-15)
+    check_close("special.euler_gamma", eul.get([0]), 0.5772156649015329, 0.000000000000001)
     # --- final 11: method-parity accessors/functions ---
     check("core.ndim", tv.core.ndim(from_array([1.0, 2.0], [2])) == 1)
     check("core.size", tv.core.size(from_array([1.0, 2.0, 3.0], [3])) == 3)
@@ -337,9 +342,9 @@ def run_fft_signal_tests():
     found1 = False
     found2 = False
     for r in roots:
-        if abs(r.real - 1.0) < 1e-6:
+        if abs(r.real - 1.0) < 0.000001:
             found1 = True
-        if abs(r.real - 2.0) < 1e-6:
+        if abs(r.real - 2.0) < 0.000001:
             found2 = True
     check("poly.roots", found1 and found2)
     # Polyfit / polyval round-trip: y = 2x + 1
@@ -347,14 +352,15 @@ def run_fft_signal_tests():
     ys = from_array([1.0, 3.0, 5.0], [3])
     coeffs = tv.poly.poly_fit(xs, ys, 1)
     vals = tv.poly.poly_val(coeffs, from_array([3.0], [1]))
-    check_close("poly.fit_val", vals.get([0]), 7.0, 1e-6)
+    check_close("poly.fit_val", vals.get([0]), 7.0, 0.000001)
     # Numerical integration of x^2 on [0,1] ~ 1/3
     grid_x = linspace(0.0, 1.0, 101)
     y2 = tv.poly.poly_val(from_array([1.0, 0.0, 0.0], [3]), grid_x)
     integral = tv.poly.trapezoidal_rule(y2, 0.01)
-    check_close("poly.trapezoid", integral, 0.3333333, 1e-3)
+    check_close("poly.trapezoid", integral, 0.3333333, 0.001)
+    return 0
 
-def run_autograd_tests():
+def run_autograd_tests() -> "i32":
     # z = x^2 - y^2 -> dz/dx = 2x, dz/dy = -2y
     x = ag.Tensor.full(3.0, [1])
     x.requires_grad = True
@@ -382,12 +388,13 @@ def run_autograd_tests():
     check("autograd.training", loss1.data.get([0]) < 100.0)
     # Softmax rows sum to 1
     sm = ag.softmax(ag.Tensor.from_ndarray(from_array([1.0, 2.0, 3.0], [1, 3])), -1)
-    check_close("autograd.softmax_row", tv.ops.sum_axis(sm.data, 1).get([0]), 1.0, 1e-9)
+    check_close("autograd.softmax_row", tv.ops.sum_axis(sm.data, 1).get([0]), 1.0, 0.000000001)
     # GELU forward known value gelu(1) ~ 0.8412
     g = ag.gelu(ag.Tensor.from_ndarray(from_array([1.0], [1])))
-    check_close("autograd.gelu", g.data.get([0]), 0.8411919906082768, 1e-9)
+    check_close("autograd.gelu", g.data.get([0]), 0.8411919906082768, 0.000000001)
+    return 0
 
-def run_neural_tests():
+def run_neural_tests() -> "i32":
     x = from_array([0.5, -0.5, 2.0, -2.0], [2, 2])
     r = tv.neural.relu(x)
     check("neural.relu", r.get([0, 0]) == 0.5 and r.get([0, 1]) == 0.0)
@@ -395,16 +402,16 @@ def run_neural_tests():
     check_close("neural.sigmoid", s.get([0]), 0.5)
     # LayerNorm output ~ normalized
     ln, mean_t, inv_std = tv.neural.layer_norm(from_array([1.0, 2.0, 3.0], [1, 3]))
-    check_close("neural.layernorm_mean", tv.ops.mean(ln), 0.0, 1e-9)
+    check_close("neural.layernorm_mean", tv.ops.mean(ln), 0.0, 0.000000001)
     # Scaled dot-product attention shape + weights normalized
     q = from_array([1.0, 0.0, 0.0, 1.0], [1, 2, 2])
     k = from_array([1.0, 0.0, 0.0, 1.0], [1, 2, 2])
     v = from_array([1.0, 2.0, 3.0, 4.0], [1, 2, 2])
     out, weights = tv.neural.scaled_dot_product_attention(q, k, v)
-    check_close("neural.attention_rows", tv.ops.sum_axis(weights, 2).get([0, 0]), 1.0, 1e-9)
+    check_close("neural.attention_rows", tv.ops.sum_axis(weights, 2).get([0, 0]), 1.0, 0.000000001)
     # Causal mask + RoPE
-    mask = tv.neural.create_causal_mask(3, -1e9)
-    check("neural.causal_mask", mask.get([0, 1]) == -1e9 and mask.get([1, 0]) == 0.0)
+    mask = tv.neural.create_causal_mask(3, -1000000000.0)
+    check("neural.causal_mask", mask.get([0, 1]) == -1000000000.0 and mask.get([1, 0]) == 0.0)
     xr = tv.neural.apply_rope(from_array([1.0, 0.0, 0.0, 1.0], [1, 2, 2]), 0, 10000.0)
     check("neural.rope_shape", xr.rank() == 3)
     # im2col + conv2d: 2x2 bottom-right unit kernel extracts inp[1,1]
@@ -419,8 +426,8 @@ def run_neural_tests():
     a_n = from_array([0.5, 0.5], [2])
     b_n = from_array([0.5, 0.5], [2])
     cost = from_array([0.0, 1.0, 1.0, 0.0], [2, 2])
-    dist, plan = tv.neural.sinkhorn(a_n, b_n, cost, 0.1, 200, 1e-9)
-    check_close("neural.sinkhorn_rows", plan.get([0, 0]) + plan.get([0, 1]), 0.5, 1e-6)
+    dist, plan = tv.neural.sinkhorn(a_n, b_n, cost, 0.1, 200, 0.000000001)
+    check_close("neural.sinkhorn_rows", plan.get([0, 0]) + plan.get([0, 1]), 0.5, 0.000001)
     # --- NumPy gap-fill: manipulation/fft/statistics ---
     sp6 = tv.manipulation.array_split(from_array([1.0, 2.0, 3.0, 4.0, 5.0], [5]), 2)
     check("manip.array_split", len(sp6) == 2 and sp6[0].total_length == 3 and sp6[1].total_length == 2)
@@ -450,18 +457,19 @@ def run_neural_tests():
     check_close("fft.ifftshift", ish.get([0]), 0.0)
     g22 = [[lf.Complex(1.0, 0.0), lf.Complex(0.0, 0.0)], [lf.Complex(0.0, 0.0), lf.Complex(1.0, 0.0)]]
     gn = tv.fft.fftn(g22)
-    check_close("fft.fftn", gn[0][0].real, 2.0, 1e-12)
+    check_close("fft.fftn", gn[0][0].real, 2.0, 0.000000000001)
+    return 0
 
-def run_domain_tests():
+def run_domain_tests() -> "i32":
     # Optimize: BFGS minimization of (x-3)^2
-    def quad(v):
+    def quad(v: "NDArray") -> "f64":
         d = v.get([0]) - 3.0
         return d * d
     result, fmin = tv.optimize.minimize_bfgs(quad, None, from_array([0.0], [1]))
-    check_close("optimize.bfgs", result.get([0]), 3.0, 1e-3)
+    check_close("optimize.bfgs", result.get([0]), 3.0, 0.001)
     # Root of x^2 - 4 in [0, 5]
     root = tv.optimize.root_brentq(lambda t: t * t - 4.0, 0.0, 5.0)
-    check_close("optimize.brentq", root, 2.0, 1e-6)
+    check_close("optimize.brentq", root, 2.0, 0.000001)
     # LP (sign convention identical to the reference implementation):
     # objective row stores -c; entering pivots on negative entries, so with
     # c = [1, 1], A = [[1, 1]], b = [4] the tableau terminates at x+y = 4.
@@ -469,7 +477,7 @@ def run_domain_tests():
         from_array([1.0, 1.0], [2]),
         from_array([1.0, 1.0], [1, 2]),
         from_array([4.0], [1]))
-    check_close("optimize.simplex", val, 4.0, 1e-6)
+    check_close("optimize.simplex", val, 4.0, 0.000001)
     # Random with fixed seed
     rnd.manual_seed(12345)
     r1 = rnd.rand([2, 2])
@@ -486,44 +494,44 @@ def run_domain_tests():
     sx = from_array([0.0, 1.0, 2.0], [3])
     sy = from_array([0.0, 1.0, 0.0], [3])
     spline = tv.interpolation.cubic_spline(sx, sy)
-    check_close("interp.spline_knot", spline.evaluate_value(1.0), 1.0, 1e-9)
+    check_close("interp.spline_knot", spline.evaluate_value(1.0), 1.0, 0.000000001)
     check_close("interp.bilinear", tv.interpolation.bilinear_interpolation(
         from_array([0.0, 2.0, 4.0, 6.0], [2, 2]), 0.5, 0.5), 3.0)
     # Statistics
     t_stat, p_val = stats.ttest_1sample(from_array([5.0, 6.0, 7.0], [3]), 6.0)
-    check("stats.ttest", abs(t_stat) < 1e6 and p_val >= 0.0 and p_val <= 1.0)
-    check_close("stats.normal_pdf", stats.normal_pdf(0.0), 0.3989422804014327, 1e-9)
+    check("stats.ttest", abs(t_stat) < 1000000.0 and p_val >= 0.0 and p_val <= 1.0)
+    check_close("stats.normal_pdf", stats.normal_pdf(0.0), 0.3989422804014327, 0.000000001)
     acf = stats.autocorrelation(from_array([1.0, 2.0, 3.0, 4.0], [4]), 2)
     check_close("stats.acf_lag0", acf.get([0]), 1.0)
     # Finance
     call = tv.finance.black_scholes_call(100.0, 100.0, 1.0, 0.05, 0.2)
     check("finance.bs_call_positive", call > 0.0 and call < 100.0)
     greeks = tv.finance.option_greeks(100.0, 100.0, 1.0, 0.05, 0.2)
-    check_close("finance.delta", greeks[0], 0.6368306, 1e-3)
+    check_close("finance.delta", greeks[0], 0.6368306, 0.001)
     npv_v = tv.finance.npv(0.1, from_array([-100.0, 110.0], [2]))
     check("finance.npv_sign", npv_v > -100.0 and npv_v < 0.0)
     # Astro: Hohmann LEO->GEO totals ~ 3.9 km/s
     dv1, dv2, total_dv, tof = tv.astro.hohmann_transfer(6678.0, 42164.0)
     check("astro.hohmann", total_dv > 3.5 and total_dv < 4.5)
     kepler_e = tv.astro.solve_kepler(1.25, 0.05)
-    check_close("astro.kepler", kepler_e - 0.05 * tv.sin(kepler_e), 1.25, 1e-9)
+    check_close("astro.kepler", kepler_e - 0.05 * tv.sin(kepler_e), 1.25, 0.000000001)
     # Physics: RK4 on dy/dt = y gives e^t
-    def exp_ode(t, yv):
+    def exp_ode(t: "f64", yv: "NDArray") -> "NDArray":
         return tv.core.from_array([yv.get([0])], [1])
     ts, traj = tv.physics.solve_rk4(exp_ode, 0.0, 1.0, tv.core.from_array([1.0], [1]), 100)
-    check_close("physics.rk4_exp", traj[100].get([0]), 2.718281828, 1e-6)
+    check_close("physics.rk4_exp", traj[100].get([0]), 2.718281828, 0.000001)
     # LBM equilibrium: mass conservation
     f0 = tv.physics.initialize_equilibrium(4, 4, 1.0, 0.1, 0.0)
     rho0, u0, v0, f1 = tv.physics.lbm_step(f0, 0.6)
-    check_close("physics.lbm_mass", tv.ops.sum(rho0), tv.ops.sum(f0), 1e-9)
+    check_close("physics.lbm_mass", tv.ops.sum(rho0), tv.ops.sum(f0), 0.000000001)
     # Quantum: Bell state |Phi+> is pure -> entropy of its full density
     # matrix is 0 (1:1 with the reference implementation over the full state),
     # and each qubit marginal has P(|1>) = 0.5.
     qs = qtm.QState(2)
     qs.h(0)
     qs.cnot(0, 1)
-    check_close("quantum.bell_pure_entropy", qs.von_neumann_entropy(), 0.0, 1e-9)
-    check_close("quantum.prob_one", qs.probability_one(0), 0.5, 1e-12)
+    check_close("quantum.bell_pure_entropy", qs.von_neumann_entropy(), 0.0, 0.000000001)
+    check_close("quantum.prob_one", qs.probability_one(0), 0.5, 0.000000000001)
     # Spatial: KD-tree nearest
     pts = from_array([0.0, 0.0, 1.0, 0.0, 5.0, 5.0], [3, 2])
     tree = tv.spatial.KDTree(pts)
@@ -539,10 +547,10 @@ def run_domain_tests():
     check("spatial.slerp_identity", slerped.w > 0.999)
     # Geometry3D: Kabsch aligns identical clouds -> RMSD ~ 0
     cloud = from_array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0], [3, 3])
-    check_close("geometry3d.kabsch_self", bio.kabsch_rmsd(cloud, cloud), 0.0, 1e-6)
+    check_close("geometry3d.kabsch_self", bio.kabsch_rmsd(cloud, cloud), 0.0, 0.000001)
     # Hyperbolic: distance(u, u) = 0
     u = tv.core.from_array([0.1, 0.1], [2])
-    check_close("geometry3d.poincare_self", tv.geometry3d.poincare_distance(u, u), 0.0, 1e-9)
+    check_close("geometry3d.poincare_self", tv.geometry3d.poincare_distance(u, u), 0.0, 0.000000001)
     # Crypto: NTT round-trip
     poly = tv.core.from_array([1.0, 2.0, 3.0, 4.0], [4])
     q_p = 17
@@ -552,24 +560,25 @@ def run_domain_tests():
     ntt_back = tv.crypto_graph.inverse_ntt(ntt_out, q_p, root)
     rt_ok = True
     for i in range(4):
-        if abs(ntt_back.get([i]) - poly.get([i])) > 1e-9:
+        if abs(ntt_back.get([i]) - poly.get([i])) > 0.000000001:
             rt_ok = False
     check("crypto.ntt_roundtrip", rt_ok)
     # Graphs: normalized Laplacian diagonal = 1
     adj = tv.core.from_array([0.0, 1.0, 1.0, 0.0], [2, 2])
     lap = tv.crypto_graph.laplacian(adj, True)
-    check_close("graph.laplacian_diag", lap.get([0, 0]), 1.0, 1e-9)
+    check_close("graph.laplacian_diag", lap.get([0, 0]), 1.0, 0.000000001)
     # Robotics: DLS with identity Jacobian returns delta
     j_id = eye_rc(2, 2)
     dx = tv.core.from_array([1.0, 2.0], [2])
     d_theta = bio.jacobian_dls(j_id, dx, 0.001)
-    check_close("robotics.dls", d_theta.get([0]), 1.0, 1e-3)
+    check_close("robotics.dls", d_theta.get([0]), 1.0, 0.001)
     identity2 = eye_rc(2, 2)
     lqr_k, lqr_p = bio.solve_discrete_lqr(
         identity2, identity2, identity2, identity2)
     check("robotics.lqr", lqr_k.rank() == 2 and lqr_p.rank() == 2)
+    return 0
 
-def main():
+def main() -> "i32":
     run_core_tests()
     run_linalg_tests()
     run_ops_tests()
@@ -577,8 +586,9 @@ def main():
     run_autograd_tests()
     run_neural_tests()
     run_domain_tests()
-    print("TokenVector stdlib smoke tests: passed=" + str(_PASSED[0]) + ", failed=" + str(_FAILED[0]))
-    if _FAILED[0] > 0:
+    print("TokenVector stdlib smoke tests: passed=" + str(_PASSED) + ", failed=" + str(_FAILED))
+    if _FAILED > 0:
         raise SystemError("Smoke tests failed")
+    return 0
 
-main()
+
