@@ -17,7 +17,7 @@ jobs:
     runs-on: windows-latest
     steps:
     - name: Checkout Code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
 
     - name: Fetch the TokenVector compiler
       shell: pwsh
