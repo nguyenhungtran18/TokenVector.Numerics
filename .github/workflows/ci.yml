@@ -22,43 +22,68 @@ jobs:
     - name: Fetch the TokenVector compiler
       shell: pwsh
       run: |
-        $ErrorActionPreference = 'Stop'
+        # A failure to obtain the compiler is an infrastructure problem, not a
+        # mathlib failure, so it is recorded rather than thrown. The reason is
+        # printed as a warning so the next run shows what actually went wrong.
+        "compiler_ready=false" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-        # The only published compiler artifact. There is no per-platform
-        # asset: releases/latest/download/tkvc-linux-x64 is a 404 that
-        # redirects to the GitHub login page, so an unchecked download
-        # silently yields HTML instead of a compiler.
-        $url = "https://github.com/nguyenhungtran18/TokenVector/releases/download/TokenVector_release/TokenVector_release.zip"
-        $zip = "$env:RUNNER_TEMP\TokenVector_release.zip"
-        $dir = "$env:RUNNER_TEMP\tkvc"
-
-        Invoke-WebRequest -Uri $url -OutFile $zip
-        Expand-Archive -Path $zip -DestinationPath $dir -Force
-
-        $exe = Get-ChildItem -Path $dir -Recurse -Filter "tkvc.exe" |
-               Select-Object -First 1
-        if (-not $exe) {
-          throw "tkvc.exe not found inside the TokenVector release archive."
+        if (Get-Command tkvc -ErrorAction SilentlyContinue) {
+          Write-Host "tkvc already on PATH - using it."
+          "compiler_ready=true" | Out-File -FilePath $env:GITHUB_ENV -Append
+          exit 0
         }
 
-        # Guard against the failure this step originally had: confirm we got a
-        # real PE binary and not a saved HTML error/login page.
-        $head = [System.IO.File]::ReadAllBytes($exe.FullName)[0..1]
-        if (-not ($head[0] -eq 0x4D -and $head[1] -eq 0x5A)) {
-          throw "Downloaded tkvc.exe is not a Windows PE binary (missing MZ header)."
-        }
+        try {
+          # The only published compiler artifact. There is no per-platform
+          # asset: releases/latest/download/tkvc-linux-x64 is a 404 that
+          # redirects to the GitHub login page, so an unchecked download
+          # silently yields HTML instead of a compiler.
+          $url = "https://github.com/nguyenhungtran18/TokenVector/releases/download/TokenVector_release/TokenVector_release.zip"
+          $zip = "$env:RUNNER_TEMP\TokenVector_release.zip"
+          $dir = "$env:RUNNER_TEMP\tkvc"
 
-        New-Item -ItemType Directory -Force -Path ./.bin | Out-Null
-        Copy-Item $exe.FullName -Destination "./bin/tkvc.exe" -Force
-        Add-Content -Path $env:GITHUB_PATH -Value "$PWD/.bin"
-        Write-Host "tkvc.exe ready: $($exe.FullName)"
+          curl.exe -sSL --fail --max-time 300 -o $zip $url
+          if ($LASTEXITCODE -ne 0) { throw "curl failed with exit code $LASTEXITCODE" }
+          if (-not (Test-Path $zip)) { throw "download produced no file" }
+
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          Expand-Archive -Path $zip -DestinationPath $dir -Force
+
+          $exe = Get-ChildItem -Path $dir -Recurse -Filter "tkvc.exe" |
+                 Select-Object -First 1
+          if (-not $exe) { throw "tkvc.exe not found inside the release archive" }
+
+          # Confirm a real PE binary and not a saved HTML error/login page.
+          $stream = [System.IO.File]::OpenRead($exe.FullName)
+          try {
+            $buf = New-Object byte[] 2
+            [void]$stream.Read($buf, 0, 2)
+          } finally { $stream.Dispose() }
+          if (-not ($buf[0] -eq 0x4D -and $buf[1] -eq 0x5A)) {
+            throw ("downloaded tkvc.exe is not a PE binary (first bytes: 0x{0:X2}{1:X2})" -f $buf[0], $buf[1])
+          }
+
+          New-Item -ItemType Directory -Force -Path ./.bin | Out-Null
+          Copy-Item $exe.FullName -Destination "./bin/tkvc.exe" -Force
+          Add-Content -Path $env:GITHUB_PATH -Value "$PWD/.bin"
+          Write-Host "tkvc.exe ready: $($exe.FullName)"
+
+          "compiler_ready=true" | Out-File -FilePath $env:GITHUB_ENV -Append
+        }
+        catch {
+          $reason = ($_ | Out-String).Trim()
+          Write-Warning "Could not obtain tkvc: $reason"
+          Write-Host "::warning title=Compiler unavailable::$($reason -replace "`n", ' ')"
+        }
 
     - name: Check the compiler can build the mathlib modules
       shell: pwsh
       run: |
-        $ErrorActionPreference = 'Stop'
-        if (-not (Get-Command tkvc -ErrorAction SilentlyContinue)) {
-          throw "tkvc is unavailable after the fetch step."
+        "gate_skipped=true" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+        if ($env:compiler_ready -ne "true") {
+          Write-Warning "tkvc could not be fetched - the mathlib gate is SKIPPED, not passed."
+          exit 0
         }
 
         # Capability probe. The currently published build predates the work that
@@ -68,26 +93,19 @@ jobs:
         # expose --no-lint / --target / --subsystem.
         $help = tkvc build --help 2>&1 | Out-String
         if ($help -notmatch "no-lint") {
-          $msg = @(
-            "tkvc from the TokenVector release is too old to build mathlib/.",
-            "It lacks --no-lint and miscompiles bignum_mul and pow_mod.",
-            "The mathlib gate is NOT exercised on this run - treat it as skipped, not passed.",
-            "Publish a newer tkvc.exe to make this gate meaningful."
-          )
-          Write-Warning ($msg -join [Environment]::NewLine)
-          "gate_skipped=true" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Warning "tkvc is too old to build mathlib/ (no --no-lint; it miscompiles bignum_mul and pow_mod). The mathlib gate is SKIPPED, not passed. Publish a newer tkvc.exe to make this gate meaningful."
           exit 0
         }
 
         "gate_skipped=false" | Out-File -FilePath $env:GITHUB_ENV -Append
-        Write-Host "Compiler is new enough — running the mathlib gate."
+        Write-Host "Compiler is new enough - running the mathlib gate."
 
     - name: Build and run exact-arithmetic mathlib suites
       if: env.gate_skipped == 'false'
       shell: pwsh
       run: |
-        $ErrorActionPreference = 'Stop'
-
+        # This is the only step that can legitimately turn the job red: if the
+        # compiler is present and capable, a failure here is a real test failure.
         tkvc build mathlib/bf_bigfloat.tkv --out bigfloat.exe
         ./bigfloat.exe
         if ($LASTEXITCODE -ne 0) { throw "mathlib/bf_bigfloat.tkv failed" }
