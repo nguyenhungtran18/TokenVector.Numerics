@@ -132,6 +132,8 @@ Passed!  - Failed:     0, Passed:    84, Skipped:     0, Total:    84, Duration:
 
 ### 3.1 Execution
 
+> **Compiler version matters.** These results come from a newer `tkvc` build than the one currently published in the [TokenVector release](https://github.com/nguyenhungtran18/TokenVector/releases/tag/TokenVector_release). The published `tkvc.exe` miscompiles both modules — running either suite with it throws `System.InvalidCastException` inside `bignum_mul` (bf_bigfloat) and `pow_mod` (number_theory). It exposes only `build [--entry] [--out]`, with no `--no-lint` / `--target` / `--subsystem`. Until a newer compiler is published, these results reproduce on a current local build but not from the published release. CI detects this and skips the gate with a warning rather than reporting a pass it did not earn.
+
 The `mathlib/` modules are pure TokenVector with no `import tv`, so they compile and execute end-to-end with the native compiler. Both suites were rebuilt from source and re-run for this report:
 
 ```text

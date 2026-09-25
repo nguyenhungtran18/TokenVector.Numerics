@@ -30,7 +30,7 @@ TokenVector.Numerics is the numerics runtime of the [TokenVector](https://github
 
 Reproducible today (re-run September 25, 2026):
 
-- [Exact-arithmetic mathlib](mathlib/): `bf_bigfloat.tkv` → **PASS 8/8**, `nt_number_theory.tkv` → **PASS 9/9**. Both are pure TokenVector with no `tv` import, so they build and run standalone: `tkvc build mathlib/bf_bigfloat.tkv --out bf.exe && ./bf.exe`. Fixes in this pass: Chudnovsky constant, `bignum_neg` limb loss, `pi_chudnovsky` precision/leading-zero, overflow-safe modular multiply/add, and `i64` boundary guards in `isqrt_i`/`trial_prime`/`factorize`/`iroot`.
+- [Exact-arithmetic mathlib](mathlib/): `bf_bigfloat.tkv` → **PASS 8/8**, `nt_number_theory.tkv` → **PASS 9/9**. Both are pure TokenVector with no `tv` import, so they build and run standalone: `tkvc build mathlib/bf_bigfloat.tkv --out bf.exe && ./bf.exe`. **Requires a current compiler** — the `tkvc.exe` in the published TokenVector release miscompiles both modules (`InvalidCastException` in `bignum_mul` / `pow_mod`); CI probes for this and skips with a warning rather than claiming a pass. Fixes in this pass: Chudnovsky constant, `bignum_neg` limb loss, `pi_chudnovsky` precision/leading-zero, overflow-safe modular multiply/add, and `i64` boundary guards in `isqrt_i`/`trial_prime`/`factorize`/`iroot`.
 - Source-level algorithm review: **36/36** across `linalg`, `linalg_functions`, `fft`, `crypto_graph` (complex arithmetic, matrix algebra incl. Cholesky A=LLᵀ, FFT vs an independent DFT oracle for N=1,2,4,5,6,7,8,9, NTT round-trip and graph Laplacian). This is a source review against independent oracles, **not** a native execution.
 
 Not currently reproducible — known limitation:

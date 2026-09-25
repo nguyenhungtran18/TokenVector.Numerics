@@ -132,6 +132,8 @@ Passed!  - Failed:     0, Passed:    84, Skipped:     0, Total:    84, Duration:
 
 ### 3.1 Thực thi
 
+> **Phiên bản compiler quan trọng.** Kết quả này đến từ bản `tkvc` **mới hơn** bản đang phát hành trong [release TokenVector](https://github.com/nguyenhungtran18/TokenVector/releases/tag/TokenVector_release). Bản `tkvc.exe` đã publish **biên dịch sai cả hai module** — chạy bất kỳ suite nào với nó đều ném `System.InvalidCastException` bên trong `bignum_mul` (bf_bigfloat) và `pow_mod` (number_theory). Nó chỉ có `build [--entry] [--out]`, không có `--no-lint` / `--target` / `--subsystem`. Cho tới khi compiler mới được phát hành, kết quả này tái lập được trên bản local hiện tại nhưng **không** tái lập được từ bản release đã đăng. CI phát hiện điều này và bỏ qua gate kèm cảnh báo thay vì báo đạt một kết quả chưa hề có.
+
 Các module `mathlib/` viết thuần TokenVector, không phụ thuộc `import tv`, nên biên dịch và chạy trọn vẹn bằng compiler native. Cả hai suite đã được build lại từ nguồn và chạy lại cho báo cáo này:
 
 ```text

@@ -75,6 +75,8 @@ Thư viện đóng vai trò là **Runtime Math & Tensor Engine Đa Ngành Toàn 
 
 Các module `mathlib/` viết thuần TokenVector, không phụ thuộc `import tv`, nên biên dịch và chạy trọn vẹn bằng compiler native. Đã kiểm chứng lại ngày **25 tháng 9, 2026**:
 
+> **Cần compiler bản mới.** File `tkvc.exe` phát hành trong [release TokenVector](https://github.com/nguyenhungtran18/TokenVector/releases/tag/TokenVector_release) cũ hơn và **biên dịch sai cả hai module** (`InvalidCastException` trong `bignum_mul` / `pow_mod`). Kết quả này tái lập được trên bản `tkvc` hiện tại, không tái lập được từ bản release đã đăng. CI kiểm tra điều này và bỏ qua kèm cảnh báo thay vì báo đạt.
+
 ```powershell
 tkvc build mathlib/bf_bigfloat.tkv      --out bf_bigfloat.exe      && ./bf_bigfloat.exe
 #    t1_sqrt2(100 cs)  t2_pi_chud(100 cs)  t3_e(100 cs)  t4_arith  t5_div  t6_bigmul

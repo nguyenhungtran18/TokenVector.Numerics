@@ -75,6 +75,8 @@ The library serves as the **Grand Unified Runtime Math & Tensor Engine**, coveri
 
 The `mathlib/` modules are pure TokenVector with no `tv` import, so they compile and run end-to-end with the native compiler. Re-verified **September 25, 2026**:
 
+> **Requires a current compiler.** The `tkvc.exe` published in the [TokenVector release](https://github.com/nguyenhungtran18/TokenVector/releases/tag/TokenVector_release) is older and **miscompiles both modules** (`InvalidCastException` in `bignum_mul` / `pow_mod`). These results reproduce on a current `tkvc` build, not from the published release. CI probes for this and skips with a warning instead of claiming a pass.
+
 ```powershell
 tkvc build mathlib/bf_bigfloat.tkv      --out bf_bigfloat.exe      && ./bf_bigfloat.exe
 #    t1_sqrt2(100 cs)  t2_pi_chud(100 cs)  t3_e(100 cs)  t4_arith  t5_div  t6_bigmul

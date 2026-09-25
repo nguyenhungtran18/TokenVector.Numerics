@@ -10,39 +10,84 @@ on:
 
 jobs:
   verify-mathlib:
-    name: Verify mathlib (.tkv) — ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ ubuntu-latest, windows-latest ]
+    name: Verify mathlib (.tkv)
+    # tkvc is published only as a Windows executable (tkvc.exe, PyInstaller).
+    # The TokenVector release has no Linux build, so there is nothing to run
+    # on ubuntu — an ubuntu leg here could only ever skip or fail.
+    runs-on: windows-latest
     steps:
     - name: Checkout Code
       uses: actions/checkout@v4
 
-    - name: Install TokenVector compiler
+    - name: Fetch the TokenVector compiler
       shell: pwsh
       run: |
         $ErrorActionPreference = 'Stop'
-        if (Get-Command tkvc -ErrorAction SilentlyContinue) { exit 0 }
-        New-Item -ItemType Directory -Force -Path ./.bin | Out-Null
-        Invoke-WebRequest `
-          -Uri "https://github.com/nguyenhungtran18/TokenVector/releases/latest/download/tkvc-linux-x64" `
-          -OutFile "./bin/tkvc" -ErrorAction SilentlyContinue
-        if (-not (Test-Path "./bin/tkvc")) {
-          Write-Host "tkvc unavailable on this runner — verification gate skipped, not passed."
-          exit 0
-        }
-        chmod +x ./bin/tkvc
-        Add-Content -Path $env:GITHUB_PATH -Value "$PWD/.bin"
 
-    - name: Build and run exact-arithmetic mathlib suites
+        # The only published compiler artifact. There is no per-platform
+        # asset: releases/latest/download/tkvc-linux-x64 is a 404 that
+        # redirects to the GitHub login page, so an unchecked download
+        # silently yields HTML instead of a compiler.
+        $url = "https://github.com/nguyenhungtran18/TokenVector/releases/download/TokenVector_release/TokenVector_release.zip"
+        $zip = "$env:RUNNER_TEMP\TokenVector_release.zip"
+        $dir = "$env:RUNNER_TEMP\tkvc"
+
+        Invoke-WebRequest -Uri $url -OutFile $zip
+        Expand-Archive -Path $zip -DestinationPath $dir -Force
+
+        $exe = Get-ChildItem -Path $dir -Recurse -Filter "tkvc.exe" |
+               Select-Object -First 1
+        if (-not $exe) {
+          throw "tkvc.exe not found inside the TokenVector release archive."
+        }
+
+        # Guard against the failure this step originally had: confirm we got a
+        # real PE binary and not a saved HTML error/login page.
+        $head = [System.IO.File]::ReadAllBytes($exe.FullName)[0..1]
+        if (-not ($head[0] -eq 0x4D -and $head[1] -eq 0x5A)) {
+          throw "Downloaded tkvc.exe is not a Windows PE binary (missing MZ header)."
+        }
+
+        New-Item -ItemType Directory -Force -Path ./.bin | Out-Null
+        Copy-Item $exe.FullName -Destination "./bin/tkvc.exe" -Force
+        Add-Content -Path $env:GITHUB_PATH -Value "$PWD/.bin"
+        Write-Host "tkvc.exe ready: $($exe.FullName)"
+
+    - name: Check the compiler can build the mathlib modules
       shell: pwsh
       run: |
         $ErrorActionPreference = 'Stop'
         if (-not (Get-Command tkvc -ErrorAction SilentlyContinue)) {
-          Write-Host "tkvc not present — skipping rather than reporting a false pass."
+          throw "tkvc is unavailable after the fetch step."
+        }
+
+        # Capability probe. The currently published build predates the work that
+        # makes mathlib compilable: it exposes only `build [--entry] [--out]`
+        # and miscompiles both modules, throwing InvalidCastException inside
+        # bignum_mul (bf_bigfloat) and pow_mod (number_theory). Newer builds
+        # expose --no-lint / --target / --subsystem.
+        $help = tkvc build --help 2>&1 | Out-String
+        if ($help -notmatch "no-lint") {
+          $msg = @(
+            "tkvc from the TokenVector release is too old to build mathlib/.",
+            "It lacks --no-lint and miscompiles bignum_mul and pow_mod.",
+            "The mathlib gate is NOT exercised on this run - treat it as skipped, not passed.",
+            "Publish a newer tkvc.exe to make this gate meaningful."
+          )
+          Write-Warning ($msg -join [Environment]::NewLine)
+          "gate_skipped=true" | Out-File -FilePath $env:GITHUB_ENV -Append
           exit 0
         }
+
+        "gate_skipped=false" | Out-File -FilePath $env:GITHUB_ENV -Append
+        Write-Host "Compiler is new enough — running the mathlib gate."
+
+    - name: Build and run exact-arithmetic mathlib suites
+      if: env.gate_skipped == 'false'
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+
         tkvc build mathlib/bf_bigfloat.tkv --out bigfloat.exe
         ./bigfloat.exe
         if ($LASTEXITCODE -ne 0) { throw "mathlib/bf_bigfloat.tkv failed" }

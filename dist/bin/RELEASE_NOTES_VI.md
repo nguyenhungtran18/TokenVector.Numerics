@@ -54,7 +54,14 @@ Lệnh smoke 175 kiểm tra `.tkv` được trích khắp tài liệu **không t
 
 ## ⚙️ CI
 
-Job `verify-stdlib` trước đây chạy `tkvc build tests/tokenvector/smoke_tests.tkv` — lệnh dừng vì lỗi phân giải `import tv`, tức là một cổng kiểm chứng không bao giờ có thể xanh. Nó được thay bằng **`verify-mathlib`**, build và chạy hai suite thực sự tái lập được (`PASS 8/8`, `PASS 9/9`). Khi máy chủ không có `tkvc`, job bỏ qua kèm thông báo rõ ràng thay vì báo đạt giả. Smoke suite vẫn nằm ngoài CI cho tới khi compiler resolve được stdlib từ thư mục dự án.
+Job `verify-stdlib` trước đây chạy `tkvc build tests/tokenvector/smoke_tests.tkv` — lệnh dừng vì lỗi phân giải `import tv`, tức là một cổng kiểm chứng không bao giờ có thể xanh. Nó được thay bằng **`verify-mathlib`**: tải compiler, kiểm tra nó có thực sự build được các module này không, rồi chạy cả hai suite (`PASS 8/8`, `PASS 9/9`).
+
+Bản đầu tiên của job này có hai lỗi, cả hai đã sửa:
+
+* Nó tải `releases/latest/download/tkvc-linux-x64` — URL này **404 và redirect về trang đăng nhập GitHub**, job lưu HTML rồi chạy nó như compiler. Bước tải giờ dùng asset thật và kiểm tra MZ header.
+* Ma trận có `ubuntu-latest`, nhưng release TokenVector chỉ có `tkvc.exe`; không có bản Linux. Job nay chỉ chạy trên Windows.
+
+Gate còn **kiểm tra năng lực compiler trước khi chạy**. Bản `tkvc.exe` đang publish đi trước công việc làm cho `mathlib/` biên dịch được và biên dịch sai cả hai module, nên job bỏ qua kèm cảnh báo nêu rõ điều đó, thay vì báo đạt một kết quả chưa từng có. Smoke suite vẫn nằm ngoài CI cho tới khi compiler resolve được stdlib từ thư mục dự án.
 
 ## 📦 Đóng gói
 

@@ -54,7 +54,14 @@ The 175-check `.tkv` smoke command quoted throughout the documentation **does no
 
 ## ⚙️ CI
 
-The `verify-stdlib` job ran `tkvc build tests/tokenvector/smoke_tests.tkv`, a command that aborts on `import tv` resolution — a gate that could never pass. It is replaced by **`verify-mathlib`**, which builds and runs the two suites that do reproduce (`PASS 8/8`, `PASS 9/9`). The job skips with a loud message instead of reporting a false pass when `tkvc` is unavailable on the runner. The smoke suite stays out of CI until the compiler can resolve the stdlib from a project directory.
+The `verify-stdlib` job ran `tkvc build tests/tokenvector/smoke_tests.tkv`, a command that aborts on `import tv` resolution — a gate that could never pass. It is replaced by **`verify-mathlib`**, which fetches the compiler, checks it can actually build these modules, then runs both suites (`PASS 8/8`, `PASS 9/9`).
+
+Two things were wrong with the first attempt at this job, both fixed here:
+
+* It downloaded `releases/latest/download/tkvc-linux-x64`, which **404s and redirects to the GitHub login page** — the job saved the HTML and ran it as a compiler. The fetch step now uses the real asset and verifies the MZ header.
+* The matrix included `ubuntu-latest`, but the TokenVector release ships **only** `tkvc.exe`; there is no Linux build. The job is Windows-only.
+
+The gate also **probes the compiler before running**. The currently published `tkvc.exe` predates the work that makes `mathlib/` compilable and miscompiles both modules, so the job skips with a warning that names this, rather than reporting a pass it did not earn. The smoke suite stays out of CI until the compiler can resolve the stdlib from a project directory.
 
 ## 📦 Packaging
 
