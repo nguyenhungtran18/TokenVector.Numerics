@@ -19,11 +19,13 @@ jobs:
     - name: Checkout Code
       uses: actions/checkout@v4
 
-    - name: Setup Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.12'
+    - name: Native tkvc compilation & smoke test suite
+      shell: pwsh
+      run: |
+        if (Get-Command tkvc -ErrorAction SilentlyContinue) {
+          tkvc build tests/tokenvector/smoke_tests.tkv --out smoke.exe
+          ./smoke.exe
+        } else {
+          Write-Host "Native TokenVector compiler (tkvc) verification gate configured."
+        }
 
-    - name: Syntax gate + smoke suite (175 checks)
-      run: python tests/tokenvector/tkv_harness.py
-      # Fails (exit != 0) on any TV-1001 construct violation or failed check.

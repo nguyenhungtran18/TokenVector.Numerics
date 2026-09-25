@@ -18,9 +18,10 @@ internal/
 .DS_Store
 Thumbs.db
 
-## Python (TV verification harness)
-__pycache__/
-*.pyc
-
 ## Freebuff local tool state
 .freebuff/
+
+## Native TokenVector build artifacts (tkvc output)
+*.exe
+*.il
+

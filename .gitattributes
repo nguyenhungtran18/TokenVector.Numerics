@@ -1,7 +1,6 @@
 # Language statistics for the GitHub language bar.
 #
 # The published artifact of this repository is the TokenVector standard
-# library (.tkv). The verification toolchain scripts are infrastructure,
-# so they are excluded from language statistics.
+# library (.tkv).
 *.tkv linguist-language=TokenVector
-tests/tokenvector/*.py linguist-generated=true
+
