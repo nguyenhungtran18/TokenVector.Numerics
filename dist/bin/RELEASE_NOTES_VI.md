@@ -52,9 +52,19 @@ Hai module thuần TokenVector, không phụ thuộc `tv`, nên biên dịch và
 
 Lệnh smoke 175 kiểm tra `.tkv` được trích khắp tài liệu **không tái lập được** trên các bản `tkvc` hiện tại — compiler phân giải `import tv` theo thư mục đi kèm của chính nó và không có tuỳ chọn runtime-path, nên build dừng với lỗi `File khong co ham top-level nao co annotation kieu DSL`. README, báo cáo kiểm thử, `llms.txt` và thông báo này nay nói rõ **175/175 là kết quả lưu của v1.1.0** và chỉ định hai suite `mathlib` là bài kiểm tra tái lập được. Bảng benchmark (kernel `tkvc` đã biên dịch so với NumPy 2.5.2) giữ nguyên và vẫn được quy cho lần đo của v1.1.0.
 
+## ⚙️ CI
+
+Job `verify-stdlib` trước đây chạy `tkvc build tests/tokenvector/smoke_tests.tkv` — lệnh dừng vì lỗi phân giải `import tv`, tức là một cổng kiểm chứng không bao giờ có thể xanh. Nó được thay bằng **`verify-mathlib`**, build và chạy hai suite thực sự tái lập được (`PASS 8/8`, `PASS 9/9`). Khi máy chủ không có `tkvc`, job bỏ qua kèm thông báo rõ ràng thay vì báo đạt giả. Smoke suite vẫn nằm ngoài CI cho tới khi compiler resolve được stdlib từ thư mục dự án.
+
 ## 📦 Đóng gói
 
-`packages/TokenVector.Numerics.1.1.1.nupkg` — cùng `lib/net8.0/TokenVector.Numerics.dll` và tài liệu XML với v1.1.0, kèm README của bản phát hành này.
+| Artifact | Nội dung |
+| :--- | :--- |
+| `packages/TokenVector.Numerics.1.1.1.nupkg` | Cùng `lib/net8.0/TokenVector.Numerics.dll` và tài liệu XML với v1.1.0, kèm README của bản phát hành này |
+| `packages/TokenVector.Numerics.1.1.1.snupkg` | Symbols (cùng PDB với v1.1.0) |
+| `dist/TokenVector.Numerics-v1.1.1-Release.zip` | Bundle đầy đủ: binary, tài liệu hiện hành, 27 module stdlib, hai module `mathlib`, smoke suite và các gói 1.1.1 |
+
+Bundle được lắp ghép chỉ từ file đã được git track, nên các file đã xoá như Python harness và `TokenVector.Numerics.deps.json` không thể lọt vào bản phát hành. Hai zip 1.0.1 và 1.1.0 vẫn còn trong repository như hồ sơ phát hành lịch sử; chúng có trước khi harness bị gỡ nên vẫn chứa các file đó.
 
 ---
 

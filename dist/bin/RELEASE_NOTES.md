@@ -52,9 +52,19 @@ Four regression tests were added: `t7_bignum_neg`, `t8_precision_borders`, `t8_i
 
 The 175-check `.tkv` smoke command quoted throughout the documentation **does not reproduce** on current `tkvc` builds — the compiler resolves `import tv` against its own bundled directory and exposes no runtime-path flag, so the build aborts with `File khong co ham top-level nao co annotation kieu DSL`. The README, test report, `llms.txt` and these notes now state plainly that **175/175 is the v1.1.0 release record** and name the `mathlib` suites as the reproducible check. The benchmark table (compiled `tkvc` kernels vs NumPy 2.5.2) is unchanged and remains attributed to the v1.1.0 measurement run.
 
+## ⚙️ CI
+
+The `verify-stdlib` job ran `tkvc build tests/tokenvector/smoke_tests.tkv`, a command that aborts on `import tv` resolution — a gate that could never pass. It is replaced by **`verify-mathlib`**, which builds and runs the two suites that do reproduce (`PASS 8/8`, `PASS 9/9`). The job skips with a loud message instead of reporting a false pass when `tkvc` is unavailable on the runner. The smoke suite stays out of CI until the compiler can resolve the stdlib from a project directory.
+
 ## 📦 Packaging
 
-`packages/TokenVector.Numerics.1.1.1.nupkg` — same `lib/net8.0/TokenVector.Numerics.dll` and XML docs as v1.1.0, with this release's README embedded.
+| Artifact | Contents |
+| :--- | :--- |
+| `packages/TokenVector.Numerics.1.1.1.nupkg` | Same `lib/net8.0/TokenVector.Numerics.dll` and XML docs as v1.1.0, with this release's README embedded |
+| `packages/TokenVector.Numerics.1.1.1.snupkg` | Symbols (same PDB as v1.1.0) |
+| `dist/TokenVector.Numerics-v1.1.1-Release.zip` | Full bundle: binaries, current docs, 27 stdlib modules, the two `mathlib` modules, the smoke suite and the 1.1.1 packages |
+
+The bundle is assembled from git-tracked files only, so deleted files such as the Python harness and `TokenVector.Numerics.deps.json` cannot reappear in a release. The v1.0.1 and v1.1.0 zips remain in the repository as historical release records; they predate the harness removal and still contain those files.
 
 ---
 
