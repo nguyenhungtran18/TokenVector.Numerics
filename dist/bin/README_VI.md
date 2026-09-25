@@ -15,7 +15,7 @@
 
 [![.NET 8](https://img.shields.io/badge/.NET-8.0%20LTS-purple.svg)](https://dotnet.microsoft.com/)
 [![CI / CD](https://github.com/nguyenhungtran18/TokenVector.Numerics/actions/workflows/ci.yml/badge.svg)](https://github.com/nguyenhungtran18/TokenVector.Numerics/actions)
-[![NuGet](https://img.shields.io/badge/NuGet-v1.1.1-blue.svg)](https://github.com/nguyenhungtran18/TokenVector.Numerics/packages)
+[![NuGet](https://img.shields.io/badge/NuGet-v1.1.2-blue.svg)](https://github.com/nguyenhungtran18/TokenVector.Numerics/packages)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Tests](https://img.shields.io/badge/Tests-84%2F84%20Passed-brightgreen.svg)]()
 [![TokenVector stdlib](https://img.shields.io/badge/.tkv%20stdlib-100%25%20numeric%20surface-9cf.svg)](src/tokenvector/README.md)

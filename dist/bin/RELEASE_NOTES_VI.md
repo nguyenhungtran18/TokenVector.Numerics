@@ -1,3 +1,41 @@
+# 🚀 TokenVector.Numerics v1.1.2 Thông Báo Phát Hành
+
+[🇬🇧 View English Version](RELEASE_NOTES.md)
+
+---
+
+**Phiên bản phát hành:** `v1.1.2`  
+**Ngày phát hành:** 25/09/2026  
+**Nền tảng mục tiêu:** .NET 8.0 LTS + thư viện chuẩn TokenVector (`.tkv`, đặc tả TV-1001)  
+**Giấy phép (License):** [MIT License](LICENSE)  
+**Kho lưu trữ (Repository):** [https://github.com/nguyenhungtran18/TokenVector.Numerics](https://github.com/nguyenhungtran18/TokenVector.Numerics)  
+**Gói NuGet:** `TokenVector.Numerics` (v1.1.2)
+
+---
+
+## 🌟 Tổng Quan & Điểm Mới trong v1.1.2
+
+Đây là bản phát hành **đóng gói**. Assembly không thay đổi — `TokenVector.Numerics.dll` giống hệt byte-for-byte với v1.1.0 (`sha256 29e937000d4b2eb5`) — và mọi thứ ở đây nhằm làm cho gói phát hành được chính xác.
+
+## 🐛 Sửa lỗi đóng gói
+
+| Lỗi | Ảnh hưởng | Cách sửa |
+| :--- | :--- | :--- |
+| Package nhúng README trỏ logo tới `assets/icon.png` nhưng không kèm thư mục `assets/` | Logo hiện thành ảnh vỡ trên nuget.org | `assets/icon.png` nay được đóng kèm cùng `icon.png` của package, nên README hiển thị y hệt trên GitHub |
+| Bundle phát hành chỉ chứa stdlib readme dưới tên `stdlib-README.md`, trong khi README trỏ tới `src/tokenvector/README.md` | Link chết bên trong archive | Bundle nay chứa readme ở cả hai đường dẫn |
+
+## 📦 Sản phẩm phát hành
+
+| Artifact | Nội dung |
+| :--- | :--- |
+| `packages/TokenVector.Numerics.1.1.2.nupkg` | DLL `lib/net8.0` + tài liệu XML, README, `icon.png` **và** `assets/icon.png` |
+| `packages/TokenVector.Numerics.1.1.2.snupkg` | Symbols (cùng PDB với v1.1.0) |
+| `dist/TokenVector.Numerics-v1.1.2-Release.zip` | Binary, tài liệu hiện hành, 27 module stdlib, hai module `mathlib`, smoke suite, các gói 1.1.2 |
+
+Cả package và bundle đều được kiểm tra lúc build: build sẽ fail nếu README tham chiếu một ảnh không có trong gói, nếu phiên bản nuspec hoặc khai báo `<icon>` sai, hoặc nếu một file đã xoá như Python harness xuất hiện lại.
+
+---
+
 # 🚀 TokenVector.Numerics v1.1.1 Thông Báo Phát Hành
 
 [🇬🇧 View English Version](RELEASE_NOTES.md)

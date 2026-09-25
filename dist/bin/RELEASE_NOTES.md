@@ -1,3 +1,41 @@
+# 🚀 TokenVector.Numerics v1.1.2 Release Notes
+
+[🇻🇳 Xem bản Tiếng Việt](RELEASE_NOTES_VI.md)
+
+---
+
+**Release Version:** `v1.1.2`  
+**Release Date:** September 25, 2026  
+**Target Framework:** .NET 8.0 LTS + TokenVector stdlib (`.tkv`, spec TV-1001)  
+**License:** [MIT License](LICENSE)  
+**Repository:** [https://github.com/nguyenhungtran18/TokenVector.Numerics](https://github.com/nguyenhungtran18/TokenVector.Numerics)  
+**NuGet Package:** `TokenVector.Numerics` (v1.1.2)
+
+---
+
+## 🌟 Overview & What's New in v1.1.2
+
+A **packaging** release. The assembly is untouched — `TokenVector.Numerics.dll` is byte-identical to v1.1.0 (`sha256 29e937000d4b2eb5`) — and everything here is about making the shipped package correct.
+
+## 🐛 Packaging Fixes
+
+| Defect | Impact | Fix |
+| :--- | :--- | :--- |
+| The package embedded a README whose logo points at `assets/icon.png`, but shipped no `assets/` directory | The logo rendered as a broken image on nuget.org | `assets/icon.png` is now included alongside the package `icon.png`, so the README renders exactly as it does on GitHub |
+| The release bundle carried the stdlib readme only as `stdlib-README.md`, while the README links to `src/tokenvector/README.md` | A dead link inside the archive | The bundle now carries the readme at both paths |
+
+## 📦 Artifacts
+
+| Artifact | Contents |
+| :--- | :--- |
+| `packages/TokenVector.Numerics.1.1.2.nupkg` | `lib/net8.0` DLL + XML docs, README, `icon.png` **and** `assets/icon.png` |
+| `packages/TokenVector.Numerics.1.1.2.snupkg` | Symbols (same PDB as v1.1.0) |
+| `dist/TokenVector.Numerics-v1.1.2-Release.zip` | Binaries, current docs, 27 stdlib modules, the two `mathlib` modules, smoke suite, 1.1.2 packages |
+
+Both the package and the bundle are checked at build time: the build fails if the README references an image that is not present, if the nuspec version or `<icon>` declaration is wrong, or if a deleted file such as the Python harness reappears.
+
+---
+
 # 🚀 TokenVector.Numerics v1.1.1 Release Notes
 
 [🇻🇳 Xem bản Tiếng Việt](RELEASE_NOTES_VI.md)

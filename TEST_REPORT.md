@@ -3,9 +3,9 @@
 
 [ 🇬🇧 English ](TEST_REPORT.md) | [ 🇻🇳 Tiếng Việt ](TEST_REPORT_VI.md)
 
-**Report ID:** TR-TKV-NUMERICS-2026-V1.1.1 (TOKENVECTOR STDLIB, MATHLIB & NUMPY-PARITY EDITION)  
-**Execution Date:** September 24, 2026 (v1.1.0 run) · September 25, 2026 (v1.1.1 mathlib re-verification)  
-**Target Version:** `v1.1.1` (Sections 3–4); Section 2 is the `v1.1.0` run log  
+**Report ID:** TR-TKV-NUMERICS-2026-V1.1.2 (TOKENVECTOR STDLIB, MATHLIB & NUMPY-PARITY EDITION)  
+**Execution Date:** September 24, 2026 (v1.1.0 run) · September 25, 2026 (v1.1.1/v1.1.2 mathlib re-verification)  
+**Target Version:** `v1.1.2` (Sections 3–4); Section 2 is the `v1.1.0` run log  
 **Test Environment:** .NET SDK 8.0 LTS, Release Configuration, x64 Architecture, Windows OS  
 **Test Framework:** xUnit.net v2.5.3, Microsoft.NET.Test.Sdk v17.8.0 + native `tkvc.exe` (compiled `smoke_tests.tkv`)  
 **Status:** **100% PASSED (84/84 xUnit in ~179 ms · 175/175 .tkv smoke · 354/354 numeric surface)**
