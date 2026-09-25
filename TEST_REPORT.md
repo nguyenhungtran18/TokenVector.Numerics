@@ -6,9 +6,10 @@
 **Report ID:** TR-TKV-NUMERICS-2026-V1.1.0-FINAL (TOKENVECTOR STDLIB & NUMPY-PARITY EDITION)  
 **Execution Date:** September 24, 2026  
 **Target Version:** `v1.1.0`  
-**Test Environment:** .NET SDK 8.0 LTS, Release Configuration, x64 Architecture, Windows OS + verification harness  
-**Test Framework:** xUnit.net v2.5.3, Microsoft.NET.Test.Sdk v17.8.0 + `tests/tokenvector/tkv_harness.py`  
-**Status:** **100% PASSED (84/84 xUnit in ~179 ms · 175/175 .tkv smoke · 354/354 numeric surface)**  
+**Test Environment:** .NET SDK 8.0 LTS, Release Configuration, x64 Architecture, Windows OS  
+**Test Framework:** xUnit.net v2.5.3, Microsoft.NET.Test.Sdk v17.8.0 + native `tkvc.exe` (compiled `smoke_tests.tkv`)  
+**Status:** **100% PASSED (84/84 xUnit in ~179 ms · 175/175 .tkv smoke · 354/354 numeric surface)**
+**Addendum (September 25, 2026):** exact-arithmetic `mathlib/` re-verified natively — **8/8** bigfloat, **9/9** number theory (Section 3); five correctness defects fixed (Section 3.2). The 175/175 smoke figure is a v1.1.0 record that does not currently reproduce — see Section 4.  
 
 ---
 
@@ -124,4 +125,78 @@ A total of 1 test files matched the specified pattern.
 
 Passed!  - Failed:     0, Passed:    84, Skipped:     0, Total:    84, Duration: 179 ms - TokenVector.Numerics.Tests.dll (net8.0)
 ```
+
+---
+
+## 3. EXACT-ARITHMETIC `MATHLIB/` VERIFICATION (September 25, 2026)
+
+### 3.1 Execution
+
+The `mathlib/` modules are pure TokenVector with no `import tv`, so they compile and execute end-to-end with the native compiler. Both suites were rebuilt from source and re-run for this report:
+
+```text
+> tkvc build mathlib/bf_bigfloat.tkv --out bf_bigfloat.exe
+[tkv] Da bien dich: bf_bigfloat.exe
+> ./bf_bigfloat.exe
+t4_arith: OK
+t5_div: OK
+t6_bigmul: OK
+t1_sqrt2(100 cs): OK
+t2_pi_chud(100 cs): OK
+t3_e(100 cs): OK
+t7_bignum_neg: OK
+t8_precision_borders: OK
+PASS 8 / 8 - bigfloat OK
+
+> tkvc build mathlib/nt_number_theory.tkv --out nt_number_theory.exe
+[tkv] Da bien dich: nt_number_theory.exe
+> ./nt_number_theory.exe
+t8_i64_boundaries: OK
+t9_large_factorization: OK
+PASS 9 / 9 - number_theory OK
+```
+
+### 3.2 Defects found and fixed
+
+| # | Module | Severity | Defect | Fix | Regression test |
+| :---: | :--- | :--- | :--- | :--- | :--- |
+| 1 | `bf_bigfloat.tkv` | **Critical** | Chudnovsky constant `10939058825628000` — wrong from ~14 significant digits on, corrupting $\pi$ at high precision | corrected to `10939058860032000` | `t2_pi_chud(100 cs)` |
+| 2 | `bf_bigfloat.tkv` | **Critical** | `bignum_neg` discarded a valid limb via a broken complement path | complement path removed; direct negation | `t7_bignum_neg` (new) |
+| 3 | `bf_bigfloat.tkv` | Major | `pi_chudnovsky` under-fetched working precision and mishandled a leading zero in the denominator digits | now requests `len(den_digits) + prec_digits + 2`, strips the leading zero, then normalises | `t8_precision_borders` (new) |
+| 4 | `nt_number_theory.tkv` | **Critical** | modular multiply/add wrapped silently on `i64`, so `pow_mod`, Miller–Rabin and Pollard–Rho could return wrong primality/factorisation | added `mul_mod_i64` / `add_mod_i64`; all three routed through them | `t8_i64_boundaries` (new) |
+| 5 | `nt_number_theory.tkv` | Major | `isqrt_i`, `trial_prime`, `factorize` and `iroot` overflowed `i64` at the boundaries (`x + 1`, `i * i`, `p * p`) | every intermediate is range-guarded and verified | `t8_i64_boundaries`, `t9_large_factorization` (new) |
+
+### 3.3 Source-level algorithm review — 36/36
+
+`linalg`, `linalg_functions`, `fft` and `crypto_graph` were reviewed algorithm-by-algorithm against independently written oracles. **This is a source-level review, not a native execution** — see Section 4.
+
+| Area | Checks | Result |
+| :--- | :---: | :---: |
+| Complex arithmetic — add, subtract, multiply, divide, conjugate, modulus | 6 | 6/6 |
+| Matrix algebra — matmul, det, trace, solve, inverse, QR, Cholesky ($A=LL^\top$), SVD, eigh | 9 | 9/9 |
+| FFT — direct transform against an independent DFT oracle for $N = 1,2,4,5,6,7,8,9$, plus IFFT round-trip | 10 | 10/10 |
+| NTT — round-trip, cyclic polynomial convolution, normalised and unnormalised graph Laplacian | 11 | 11/11 |
+| **Total** | **36** | **36/36** |
+
+Three candidate failures surfaced during this review turned out to be **oracle errors, not library errors**, and were corrected in the oracle: $(3+2i)/(1-4i) = (-5+14i)/17$; $A=\begin{bmatrix}1&2\\3&4\end{bmatrix},\, b=[1,2]$ solves to $x=[0,\,0.5]$; and Cholesky reconstructs $L L^\top$, not $L L$.
+
+---
+
+## 4. KNOWN LIMITATION — SMOKE SUITE NOT REPRODUCIBLE
+
+Section 2 records the v1.1.0 release run. The `.tkv` smoke command quoted throughout the documentation,
+
+```powershell
+tkvc build tests/tokenvector/smoke_tests.tkv --entry main --out smoke.exe
+```
+
+**fails on the current compiler** and did not produce the documented `passed=175, failed=0`:
+
+```text
+[tkv] Loi: File khong co ham top-level nao co annotation kieu DSL
+```
+
+Root cause: `tkvc build` resolves `import tv` against its own bundled directory (a PyInstaller extraction path), not the repository's `src/tokenvector`, and exposes no runtime-path flag — the `-r src/tokenvector` invocation form referenced in the `smoke_tests.tkv` header is rejected outright (`invalid choice`, the only subcommand is `build`). A minimal probe importing `tv` confirms it independently: `import module 'tv' khong tim thay trong thu muc hien tai hoi site-packages`.
+
+Consequently the **175/175 figure should be read as the v1.1.0 release record**, not a live gate. The reproducible check today is the pair of `mathlib` suites in Section 3.1. The CI job `verify-stdlib` is not currently red for this reason — it short-circuits when `tkvc` is absent from the runner — but it also cannot be relied on as evidence until the compiler exposes a runtime-path option.
 

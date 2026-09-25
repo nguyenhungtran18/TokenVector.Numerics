@@ -71,44 +71,74 @@ The library serves as the **Grand Unified Runtime Math & Tensor Engine**, coveri
 
 ## 🧪 Verification & Quality Assurance
 
-The **TokenVector stdlib (`.tkv`)** — 27 modules, ~12.1k lines — is verified on every push by GitHub Actions CI (syntax gate + 175 smoke checks) and holds **full numeric-surface coverage** (354/354 audited functions):
+### Reproducible today — exact-arithmetic `mathlib/`
+
+The `mathlib/` modules are pure TokenVector with no `tv` import, so they compile and run end-to-end with the native compiler. Re-verified **September 25, 2026**:
+
 ```powershell
-python tests/tokenvector/tkv_harness.py
-#    Syntax gate: all .tkv modules parse, TV-1001 constructs only.
-#    TokenVector stdlib smoke tests: passed=175, failed=0
-python tests/tokenvector/numpy_coverage_audit.py
-#    matched in .tkv stdlib : 354 (100%) | truly missing: 0
+tkvc build mathlib/bf_bigfloat.tkv      --out bf_bigfloat.exe      && ./bf_bigfloat.exe
+#    t1_sqrt2(100 cs)  t2_pi_chud(100 cs)  t3_e(100 cs)  t4_arith  t5_div  t6_bigmul
+#    t7_bignum_neg  t8_precision_borders        -> PASS 8 / 8 - bigfloat OK
+
+tkvc build mathlib/nt_number_theory.tkv --out nt_number_theory.exe && ./nt_number_theory.exe
+#    t1..t7  +  t8_i64_boundaries  t9_large_factorization
+#                                            -> PASS 9 / 9 - number_theory OK
 ```
-The v1.1.0 runtime release additionally passed **84/84 unit tests** in Release mode (run log archived in [TEST_REPORT.md](TEST_REPORT.md); shipped binaries in [dist/bin/](dist/bin/)).
+
+| Module | Result | What it covers |
+| :--- | :---: | :--- |
+| `mathlib/bf_bigfloat.tkv` | **8 / 8 PASS** | $\sqrt{2}$, $\pi$ (Chudnovsky) and $e$ (spigot) to 100 digits checked against independent references; bignum add/sub/mul/div; negative-bignum limb handling; precision-border behaviour |
+| `mathlib/nt_number_theory.tkv` | **9 / 9 PASS** | gcd/lcm, `isqrt`, trial division, `iroot`, **overflow-safe** `pow_mod` / Miller–Rabin / Pollard–Rho, AKS; plus `i64` boundary and large-factorization regressions |
+| `linalg` / `linalg_functions` / `fft` / `crypto_graph` | **36 / 36** | complex add/sub/mul/div/conj/modulus; matmul, det, trace, solve, inverse, QR, Cholesky ($A = LL^\top$), SVD, eigh; FFT against an independent DFT oracle for $N = 1,2,4,5,6,7,8,9$ plus IFFT round-trip; NTT round-trip, cyclic convolution, normalised and unnormalised graph Laplacian |
+
+**Defects found and fixed in this pass**
+
+| Module | Defect | Fix |
+| :--- | :--- | :--- |
+| `bf_bigfloat.tkv` | Chudnovsky constant was `10939058825628000` | corrected to `10939058860032000` (old value wrong from ~14 digits on) |
+| `bf_bigfloat.tkv` | `bignum_neg` discarded a valid limb | complement path removed; direct negation |
+| `bf_bigfloat.tkv` | `pi_chudnovsky` under-fetched working precision and mishandled a leading zero | now requests `len(den_digits) + prec_digits + 2`, strips the leading zero, then normalises |
+| `nt_number_theory.tkv` | modular multiply/add wrapped silently on `i64` | added `mul_mod_i64` / `add_mod_i64`; `pow_mod`, Miller–Rabin and Pollard–Rho route through them |
+| `nt_number_theory.tkv` | `isqrt_i`, `trial_prime`, `factorize`, `iroot` overflowed at `i64` boundaries (`x + 1`, `i * i`, `p * p`) | every intermediate is now range-guarded and checked |
+
+Regression tests `t7_bignum_neg`, `t8_precision_borders`, `t8_i64_boundaries` and `t9_large_factorization` were added to lock these fixes in.
+
+> **Scope note.** The 36/36 row is a *source-level* algorithm review against independent oracles — not a native execution of `linalg`/`fft`/`crypto_graph`, which the compiler limitation below currently prevents. The 8/8 and 9/9 rows are genuine native runs.
+
+### Known limitation — the 175-check stdlib smoke suite
+
+The v1.1.0 release record is **84/84** runtime unit tests, **175/175** `.tkv` smoke checks and **354/354** numeric-surface coverage ([TEST_REPORT.md](TEST_REPORT.md)). The smoke command quoted there
+
+```powershell
+tkvc build tests/tokenvector/smoke_tests.tkv --entry main --out smoke.exe
+```
+
+does **not** reproduce on `tkvc` builds that ship without a runtime-path option: the compiler resolves `import tv` against its own bundled directory and aborts with `File khong co ham top-level nao co annotation kieu DSL`, while the `-r src/tokenvector` form referenced by the file header is no longer accepted by `tkvc build`. Treat 175/175 as the **v1.1.0 record**, and use the two `mathlib` suites above as the reproducible check.
+
 See [src/tokenvector/README.md](src/tokenvector/README.md) for the module map, coverage tables, and benchmarks.
 
 ---
 
 ## ⚡ Performance & Benchmarks
 
-Benchmarked on **AMD Ryzen / Intel x86_64** (Release build, .NET 8 LTS, Native SIMD AVX2/FMA, 100% Core scaling via `Parallel.For`):
+Benchmarks below are measured on the **real TokenVector compiler** (`tkvc.exe`, CIL/native): pure-TokenVector kernels — same algorithms as this stdlib (cache-tiled 32×32 matmul, one-sided Jacobi SVD, radix-2/Bluestein FFT) — compiled to standalone `.exe` files and timed against NumPy 2.5.2 on the same Windows x86_64 machine, same repetition counts per side, best of 3, process startup (~26 ms, measured with a no-op exe) subtracted:
 
-| Operation | Workload / Shape | Standard Baseline | TokenVector.Numerics (AVX2 + MT) | Speedup |
-| :--- | :--- | :--- | :--- | :---: |
-| **Matrix Multiplication (`MatMul`)** | $1024 \times 1024$ FP32 | 148.2 ms | **7.8 ms** (Cache-Tiled 32x32) | **19.0x** |
-| **2D Fast Fourier Transform (`FFT2D`)**| $1024 \times 1024$ Complex64 | 82.5 ms | **6.1 ms** (Radix-2 + AVX2) | **13.5x** |
-| **Autograd MLP Backward Pass** | 1000 iter ($B=64, D=128$) | 312.0 ms | **18.4 ms** (Zero-Alloc DAG) | **17.0x** |
-| **Cosine Vector Similarity** | $1,000,000 \times 128$-dim | 195.4 ms | **11.2 ms** (AVX2 FMA Vector256) | **17.4x** |
-| **Out-of-Core Memory-Mapped I/O** | $10\text{ GB}$ `.npy` Disk Slice | 4,200 ms (Full RAM load) | **0.8 ms** (Zero-RAM `mmap`) | **5250x** |
+| Kernel | Workload / Shape | TokenVector (compiled) | NumPy 2.5.2 | Ratio |
+| :--- | :--- | ---: | ---: | :---: |
+| **Matrix Multiplication** (cache-tiled 32×32) | 32×32 f64 | 2.28 ms | 6.2 µs | ~365× |
+| **Matrix Multiplication** (cache-tiled 32×32) | 64×64 f64 | 17.5 ms | 23.4 µs | ~748× |
+| **Matrix Multiplication** (cache-tiled 32×32) | 128×128 f64 | 151.9 ms | 116.1 µs | ~1308× |
+| **Elementwise Add + Broadcast** | 2×131072 f64 | 6.05 ms | 849.7 µs | ~7.1× |
+| **SVD** (one-sided Jacobi, singular values) | 40×40 f64 | 303.0 ms | 161.1 µs | ~1880× |
+| **FFT Radix-2** | 1024 points | 688.9 µs | 40.0 µs | ~17.2× |
+| **FFT Bluestein** (chirp-z, non-power-of-2) | 1000 points | 6.54 ms | 37.5 µs | ~174× |
 
-#### 🔑 Key Acceleration Pillars:
-* **Hardware SIMD (AVX2 & FMA):** Processes 8 FP32 values per CPU cycle in hardware vector registers with fused multiply-add.
-* **$32 \times 32$ Cache-Tiling:** Keeps matrix sub-blocks within ultra-fast L1 Data Cache (1–4 ns latency), eliminating memory wall cache misses.
-* **True No-GIL Multithreading:** Scales compute tasks linearly across 100% of physical CPU cores via `Parallel.For`.
-* **Zero-GC & Direct Pointers:** Leverages unmanaged `TensorBuffer<T>`, `Span<T>`, and in-place buffer reuse without Garbage Collector pauses.
-* **Zero-RAM Memory-Mapping:** Uses OS kernel `mmap` to slice multi-gigabyte tensors from NVMe disk with $< 1\text{ ms}$ latency and 0 MB RAM overhead.
+**Numeric parity is verified per kernel against NumPy:** matmul/add checksums (Σ, Σx²) agree to float64 limits, SVD singular values differ from LAPACK by **2.4e-14**, FFT sample coefficients (X[1], X[N/2]) match to **~1e-12**.
 
-#### 📐 Benchmark Methodology & Computational Basis:
-* **MatMul ($1024 \times 1024$, $2.15\text{ GFLOPs}$):** Naive 3-loop scalar causes severe L1/L2 cache misses ($\sim 14.5\text{ GFLOPS} \rightarrow 148.2\text{ ms}$). TokenVector.Numerics utilizes $32 \times 32$ cache tiling to lock data in 4KB L1 cache ($>1.5\text{ TB/s}$ bandwidth) combined with AVX2 FMA (16 FLOPs/cycle) and 16-thread `Parallel.For` ($\sim 275\text{ GFLOPS} \rightarrow \mathbf{7.8\text{ ms}}$).
-* **2D FFT ($1024 \times 1024$, $\sim 105\text{ MFLOPs}$):** Replaces $O(N^2)$ discrete transforms with Radix-2 Cooley-Tukey + SIMD twiddle factors + multithreaded row/column concurrency ($82.5\text{ ms} \rightarrow \mathbf{6.1\text{ ms}}$).
-* **Autograd MLP Backward (1000 iter, $B=64, D=128$):** Traditional frameworks suffer continuous GC pauses from per-step node allocations ($312.0\text{ ms}$). TokenVector.Numerics utilizes a Zero-Allocation static DAG with in-place unmanaged gradient reuse ($\mathbf{18.4\text{ ms}}$).
-* **Cosine Similarity ($1\text{M} \times 128\text{-dim}$, $512\text{ MB}$):** Single-pass triple-vector AVX2 registers simultaneously compute dot product, normA, and normB, saturating full memory bus bandwidth ($\sim 45\text{ GB/s} \rightarrow \mathbf{11.2\text{ ms}}$).
-* **Out-of-Core Disk I/O ($10\text{ GB}$ `.npy`):** Eliminates $4.2\text{ s}$ full RAM disk ingestion by using kernel virtual memory page tables to demand-load only accessed 4KB pages in $\mathbf{0.8\text{ ms}}$ with 0 MB RAM footprint.
+#### 🔑 How to read the ratios:
+* NumPy is a hand-tuned C library (SIMD/AVX2, LAPACK, pocketfft). The compiled TokenVector gap comes from `tkvc`'s boxed-integer arithmetic (`TkvInt` struct with a BigInteger fast path) and `List<T>` element storage — not from interpretation.
+* These are **compiled** figures: the earlier interpreter-on-interpreter harness numbers (400–3000×) were 3–250× slower than this on the same kernels.
+* The measurement is reproducible: `bench_test.tkv` (TokenVector source) is compiled with `tkvc.exe build bench_test.tkv --out bench_test.exe`, split into one kernel per exe, and timed by a small external wrapper.
 
 ---
 

@@ -389,21 +389,25 @@ The 241 language-layer names are handled by the TokenVector language/compiler it
 ### 15.3 Verification Toolchain
 
 ```powershell
-# 1. Smoke suite: 175 checks across all 27 modules
-python tests/tokenvector/tkv_harness.py
-#    Syntax gate: all .tkv modules parse, TV-1001 constructs only.
-#    TokenVector stdlib smoke tests: passed=175, failed=0
+# 1. Exact-arithmetic mathlib — reproducible today, no tv import required
+tkvc build mathlib/bf_bigfloat.tkv      --out bf_bigfloat.exe      && ./bf_bigfloat.exe
+#    PASS 8 / 8 - bigfloat OK
+tkvc build mathlib/nt_number_theory.tkv --out nt_number_theory.exe && ./nt_number_theory.exe
+#    PASS 9 / 9 - number_theory OK
 
-# 2. Coverage audit (reproducible, prints per-bucket detail)
-python tests/tokenvector/numpy_coverage_audit.py
-
-# 3. Numeric parity + performance benchmark
-python tests/tokenvector/benchmark_vs_numpy.py
-#    matmul / broadcast add: max|diff| = 0.0, SVD: 1.1e-14, FFT: ~5e-12
-
-# Or compile natively with tkvc (compiler repo):
-./tkvc.exe tests/tokenvector/smoke_tests.tkv -r src/tokenvector -o smoke.exe
+# 2. Numeric parity + performance benchmark (compiled TokenVector vs NumPy)
+#    bench_test.tkv is compiled with tkvc.exe into 7 one-kernel exes and
+#    timed against NumPy 2.5.2 on the same machine (see README §5):
+#    parity: matmul/add checksums to float64 limits, SVD 2.4e-14, FFT ~1e-12
+#    ratios: add ~7x, FFT radix-2 ~17x ... SVD ~1880x (compiled, not interpreted)
 ```
+
+> **Known limitation — the 175-check smoke suite.** The v1.1.0 release record is 175/175, but the command
+> `tkvc build tests/tokenvector/smoke_tests.tkv --entry main --out smoke.exe` does **not** currently
+> reproduce: `tkvc build` resolves `import tv` against its own bundled directory and exposes no
+> runtime-path flag, so the build aborts with `File khong co ham top-level nao co annotation kieu DSL`.
+> Treat 175/175 as the v1.1.0 record and use the `mathlib` suites above as the reproducible check.
+> Full detail in [TEST_REPORT.md](TEST_REPORT.md) §4.
 
 ### 15.4 Quick Start in TokenVector
 

@@ -2,7 +2,7 @@
 
 > High-performance tensor computing, linear algebra, autograd, optimization, signal processing, quantum, astrodynamics, finance, and computational physics library for .NET 8 — published natively in the **TokenVector language** standard library (`.tkv`, spec TV-1001) with full numeric-surface coverage (354/354 audited functions).
 
-TokenVector.Numerics is the numerics runtime of the [TokenVector](https://github.com/nguyenhungtran18/TokenVector) language ecosystem. Version 1.1.0 (September 24, 2026), MIT license, .NET 8 LTS, NuGet package `TokenVector.Numerics`.
+TokenVector.Numerics is the numerics runtime of the [TokenVector](https://github.com/nguyenhungtran18/TokenVector) language ecosystem. Version 1.1.1 (September 25, 2026), MIT license, .NET 8 LTS, NuGet package `TokenVector.Numerics`. v1.1.1 is a documentation-and-correctness release: the `TokenVector.Numerics.dll` is byte-identical to v1.1.0 (the C# engine sources were removed in v1.1.0, so the assembly is no longer recompilable from source).
 
 ## Docs
 
@@ -10,9 +10,9 @@ TokenVector.Numerics is the numerics runtime of the [TokenVector](https://github
 - [README (Tiếng Việt)](README_VI.md): bản tiếng Việt của README
 - [User Guide (English)](USER_GUIDE.md): 15-chapter technical handbook with runnable `.tkv` examples
 - [User Guide (Tiếng Việt)](USER_GUIDE_VI.md): bản tiếng Việt của hướng dẫn sử dụng
-- [Release Notes v1.1.0](RELEASE_NOTES.md): what changed in v1.1.0 (previous v1.0.1 notes included below)
+- [Release Notes v1.1.1](RELEASE_NOTES.md): mathlib correctness fixes and verification record (v1.1.0 and v1.0.1 notes included below)
 - [Release Notes (Tiếng Việt)](RELEASE_NOTES_VI.md): bản tiếng Việt của thông báo phát hành
-- [Test Report](TEST_REPORT.md): 84/84 runtime tests + 175/175 .tkv smoke + 354/354 numeric-surface evidence
+- [Test Report](TEST_REPORT.md): 84/84 runtime tests (v1.1.0 record) + 354/354 numeric-surface coverage + Section 3 mathlib verification (8/8, 9/9, 36/36)
 - [Test Report (Tiếng Việt)](TEST_REPORT_VI.md): bản tiếng Việt của báo cáo kiểm thử
 
 ## Language Specification
@@ -26,15 +26,26 @@ TokenVector.Numerics is the numerics runtime of the [TokenVector](https://github
 - Modules: `core`, `engine`, `io`, `linalg`, `linalg_functions`, `ops`, `manipulation`, `grid`, `compare`, `autograd`, `neural`, `optimize`, `interpolation`, `poly`, `special`, `fft`, `signal`, `random`, `statistics`, `quantum`, `physics`, `astro`, `finance`, `spatial`, `geometry3d`, `crypto_graph`, `biology_robotics`
 - Each module header lists its per-section source mapping and fidelity notes (Parallel.For/AVX2 collapse to scalar loops; `tkvc -O parallel -O simd` restores them)
 
-## Verification (reproducible)
+## Verification
 
-- [Smoke harness](tests/tokenvector/tkv_harness.py): AST syntax gate (TV-1001 constructs only) + standalone `tv.*` runtime; runs `tests/tokenvector/smoke_tests.tkv` — current: passed=175, failed=0
-- [Coverage audit](tests/tokenvector/numpy_coverage_audit.py): cross-checks the stdlib surface against an independent numeric-library reference (354 library functions audited) — current: matched=354 (100%), missing=0 (script filename kept for reproducibility)
-- [Benchmark](tests/tokenvector/benchmark_vs_numpy.py): numeric parity across matmul/add (0.0), SVD (1.1e-14), FFT (≈5e-12); interpreter-level speed ratios reported with the `tkvc`-compiled caveat
-- Runtime release record: 84/84 unit tests passed at v1.1.0 (run log in TEST_REPORT.md; shipped binaries in dist/bin/). Ongoing verification runs on every push via GitHub Actions (syntax gate + smoke suite)
+Reproducible today (re-run September 25, 2026):
+
+- [Exact-arithmetic mathlib](mathlib/): `bf_bigfloat.tkv` → **PASS 8/8**, `nt_number_theory.tkv` → **PASS 9/9**. Both are pure TokenVector with no `tv` import, so they build and run standalone: `tkvc build mathlib/bf_bigfloat.tkv --out bf.exe && ./bf.exe`. Fixes in this pass: Chudnovsky constant, `bignum_neg` limb loss, `pi_chudnovsky` precision/leading-zero, overflow-safe modular multiply/add, and `i64` boundary guards in `isqrt_i`/`trial_prime`/`factorize`/`iroot`.
+- Source-level algorithm review: **36/36** across `linalg`, `linalg_functions`, `fft`, `crypto_graph` (complex arithmetic, matrix algebra incl. Cholesky A=LLᵀ, FFT vs an independent DFT oracle for N=1,2,4,5,6,7,8,9, NTT round-trip and graph Laplacian). This is a source review against independent oracles, **not** a native execution.
+
+Not currently reproducible — known limitation:
+
+- [Smoke suite](tests/tokenvector/smoke_tests.tkv): the documented `tkvc build tests/tokenvector/smoke_tests.tkv --entry main --out smoke.exe` **fails** on current `tkvc` builds with `File khong co ham top-level nao co annotation kieu DSL`. Root cause: `tkvc build` resolves `import tv` against its own bundled directory and exposes no runtime-path flag (the `-r src/tokenvector` form in the file header is rejected). The **175/175** figure is therefore the **v1.1.0 release record**, not a live gate. CI job `verify-stdlib` short-circuits when `tkvc` is absent, so it is not currently red, but it is not evidence either.
+
+Other evidence:
+
+- Coverage audit: stdlib surface vs an independent numeric-library reference (354 library functions audited) — matched=354 (100%), missing=0
+- Benchmark (measured for v1.1.0): compiled-TokenVector kernels (via `tkvc.exe build bench_test.tkv`, one kernel per exe) vs NumPy 2.5.2 on the same machine — parity: matmul/add checksums to float64 limits, SVD 2.4e-14, FFT ~1e-12; ratios: add ~7x, FFT radix-2 ~17x, matmul 365–1308x, SVD ~1880x (compiled, not interpreted)
+- Runtime release record: 84/84 unit tests passed at v1.1.0 (run log in TEST_REPORT.md; shipped binaries in dist/bin/)
 
 ## Packaging
 
-- [dist/bin/](dist/bin/): standalone `TokenVector.Numerics.dll` (net8.0) + XML docs + spec/README copies + brand icon
-- [dist/nuget/](dist/nuget/): `TokenVector.Numerics.1.1.0.nupkg` (README + icon embedded) and `.snupkg` symbols
-- [dist/TokenVector.Numerics-v1.1.0-Release.zip](dist/TokenVector.Numerics-v1.1.0-Release.zip): full release bundle (binaries + stdlib + toolchain + packages)
+- [dist/bin/](dist/bin/): standalone `TokenVector.Numerics.dll` (net8.0, v1.1.0 build) + XML docs + spec/README copies + brand icon
+- [packages/](packages/): `TokenVector.Numerics.1.1.1.nupkg` (README + icon embedded; same DLL as v1.1.0) and earlier `1.0.1` / `1.1.0` packages
+- [dist/nuget/](dist/nuget/): release-candidate packages and `.snupkg` symbols
+- [dist/TokenVector.Numerics-v1.1.0-Release.zip](dist/TokenVector.Numerics-v1.1.0-Release.zip): full v1.1.0 release bundle (binaries + stdlib + toolchain + packages)
