@@ -6,9 +6,10 @@
 **Mã báo cáo:** TR-TKV-NUMERICS-2026-V1.1.0-FINAL (TOKENVECTOR STDLIB & NUMPY-PARITY EDITION)  
 **Ngày thực hiện:** 24/09/2026  
 **Phiên bản mục tiêu:** `v1.1.0`  
-**Môi trường thử nghiệm:** .NET SDK 8.0 LTS, Release Configuration, x64 Architecture, Windows OS + verification harness  
-**Khung kiểm thử:** xUnit.net v2.5.3, Microsoft.NET.Test.Sdk v17.8.0 + `tests/tokenvector/tkv_harness.py`  
+**Môi trường thử nghiệm:** .NET SDK 8.0 LTS, Release Configuration, x64 Architecture, Windows OS  
+**Khung kiểm thử:** xUnit.net v2.5.3, Microsoft.NET.Test.Sdk v17.8.0 + native `tkvc.exe` (compile `smoke_tests.tkv`)  
 **Trạng thái kiểm thử:** **100% PASSED (84/84 xUnit in ~179 ms · 175/175 .tkv smoke · 354/354 numeric surface)**  
+**Bổ sung (ngày 25 tháng 9, 2026):** `mathlib/` toán chính xác đã kiểm chứng lại bằng native — **8/8** bigfloat, **9/9** number theory (Mục 3); đã sửa 5 lỗi đúng/sai số học (Mục 3.2). Con số 175/175 smoke là kết quả lưu của v1.1.0 và hiện không tái lập được — xem Mục 4.  
 
 ---
 
@@ -105,6 +106,8 @@
 
 ## 2. KẾT QUẢ THỰC THI (CLI OUTPUT)
 
+> Ghi chú phạm vi: log này được ghi nhận cho bản runtime v1.1.0. Sau đó phần source engine và test project đã bị loại khỏi repository; binary phát hành vẫn còn trong `dist/bin/` và gánh nặng kiểm chứng nay thuộc bộ suite stdlib TokenVector (Mục 3).
+
 ```text
 Command: dotnet test "TokenVector.Numerics.sln" -c Release
 
@@ -122,4 +125,78 @@ A total of 1 test files matched the specified pattern.
 
 Passed!  - Failed:     0, Passed:    84, Skipped:     0, Total:    84, Duration: 179 ms - TokenVector.Numerics.Tests.dll (net8.0)
 ```
+
+---
+
+## 3. KIỂM CHỨNG `MATHLIB/` TOÁN CHÍNH XÁC (ngày 25 tháng 9, 2026)
+
+### 3.1 Thực thi
+
+Các module `mathlib/` viết thuần TokenVector, không phụ thuộc `import tv`, nên biên dịch và chạy trọn vẹn bằng compiler native. Cả hai suite đã được build lại từ nguồn và chạy lại cho báo cáo này:
+
+```text
+> tkvc build mathlib/bf_bigfloat.tkv --out bf_bigfloat.exe
+[tkv] Da bien dich: bf_bigfloat.exe
+> ./bf_bigfloat.exe
+t4_arith: OK
+t5_div: OK
+t6_bigmul: OK
+t1_sqrt2(100 cs): OK
+t2_pi_chud(100 cs): OK
+t3_e(100 cs): OK
+t7_bignum_neg: OK
+t8_precision_borders: OK
+PASS 8 / 8 - bigfloat OK
+
+> tkvc build mathlib/nt_number_theory.tkv --out nt_number_theory.exe
+[tkv] Da bien dich: nt_number_theory.exe
+> ./nt_number_theory.exe
+t8_i64_boundaries: OK
+t9_large_factorization: OK
+PASS 9 / 9 - number_theory OK
+```
+
+### 3.2 Lỗi phát hiện và đã sửa
+
+| # | Module | Mức độ | Lỗi | Cách sửa | Test hồi quy |
+| :---: | :--- | :--- | :--- | :--- | :--- |
+| 1 | `bf_bigfloat.tkv` | **Nghiêm trọng** | hằng Chudnovsky `10939058825628000` — sai từ khoảng chữ số 14, làm sai $\pi$ ở độ chính xác cao | sửa thành `10939058860032000` | `t2_pi_chud(100 cs)` |
+| 2 | `bf_bigfloat.tkv` | **Nghiêm trọng** | `bignum_neg` làm mất một limb hợp lệ qua nhánh phủ bù lỗi | bỏ nhánh phủ bù, đảo dấu trực tiếp | `t7_bignum_neg` (mới) |
+| 3 | `bf_bigfloat.tkv` | Lớn | `pi_chudnovsky` lấy thiếu độ chính xác và xử lý sai zero dẫn trong các chữ số mẫu số | nay lấy `len(den_digits) + prec_digits + 2`, bỏ zero dẫn rồi chuẩn hoá | `t8_precision_borders` (mới) |
+| 4 | `nt_number_theory.tkv` | **Nghiêm trọng** | phép nhân/cộng modulo âm thầm tràn `i64`, khiến `pow_mod`, Miller–Rabin và Pollard–Rho có thể trả về tính nguyên/phân tích sai | thêm `mul_mod_i64` / `add_mod_i64`; cả ba dùng qua đó | `t8_i64_boundaries` (mới) |
+| 5 | `nt_number_theory.tkv` | Lớn | `isqrt_i`, `trial_prime`, `factorize` và `iroot` tràn `i64` ở các biên (`x + 1`, `i * i`, `p * p`) | mọi bước nhân trung gian đều được kiểm tra miền giá trị | `t8_i64_boundaries`, `t9_large_factorization` (mới) |
+
+### 3.3 Rà soát thuật toán ở mức mã nguồn — 36/36
+
+`linalg`, `linalg_functions`, `fft` và `crypto_graph` được rà soát từng thuật toán đối chiếu với các oracle viết độc lập. **Đây là rà soát mức mã nguồn, không phải lần chạy native** — xem Mục 4.
+
+| Hạng mục | Số kiểm tra | Kết quả |
+| :--- | :---: | :---: |
+| Số phức — cộng, trừ, nhân, chia, phủ bù, mô đun | 6 | 6/6 |
+| Đại số ma trận — matmul, det, trace, solve, inverse, QR, Cholesky ($A=LL^\top$), SVD, eigh | 9 | 9/9 |
+| FFT — biến đổi trực tiếp đối chiếu oracle DFT độc lập với $N = 1,2,4,5,6,7,8,9$, cộng round-trip IFFT | 10 | 10/10 |
+| NTT — round-trip, tích chập đa thức tuần hoàn, Laplacian chuẩn hoá và không chuẩn hoá | 11 | 11/11 |
+| **Tổng** | **36** | **36/36** |
+
+Trong quá trình rà soát, ba trường hợp nghi ngờ lỗi hoá ra là **lỗi của oracle chứ không phải của thư viện** và đã được sửa ở oracle: $(3+2i)/(1-4i) = (-5+14i)/17$; $A=\begin{bmatrix}1&2\\3&4\end{bmatrix},\, b=[1,2]$ có nghiệm $x=[0,\,0.5]$; và Cholesky tách $L L^\top$, không phải $L L$.
+
+---
+
+## 4. GIỚI HẠN ĐÃ BIẾT — SMOKE SUITE KHÔNG TÁI LẬP ĐƯỢC
+
+Mục 2 ghi nhận lần chạy của bản phát hành v1.1.0. Lệnh smoke `.tkv` được trích khắp tài liệu,
+
+```powershell
+tkvc build tests/tokenvector/smoke_tests.tkv --entry main --out smoke.exe
+```
+
+**thất bại trên compiler hiện tại** và không tạo ra kết quả `passed=175, failed=0` như tài liệu mô tả:
+
+```text
+[tkv] Loi: File khong co ham top-level nao co annotation kieu DSL
+```
+
+Nguyên nhân gốc: `tkvc build` phân giải `import tv` theo thư mục đi kèm của chính nó (đường dẫn giải nén PyInstaller), chứ không phải `src/tokenvector` của repository, và không có tuỳ chọn runtime-path — dạng lệnh `-r src/tokenvector` nêu trong phần đầu `smoke_tests.tkv` bị từ chối thẳng (`invalid choice`, lệnh con duy nhất là `build`). Một probe tối giản import `tv` xác nhận độc lập điều này: `import module 'tv' khong tim thay trong thu muc hien tai hoi site-packages`.
+
+Vì vậy **con số 175/175 nên được đọc là kết quả lưu của bản phát hành v1.1.0**, không phải một cổng kiểm chứng đang hoạt động. Bài kiểm tra tái lập được ngày hôm nay là hai suite `mathlib` ở Mục 3.1. Job CI `verify-stdlib` hiện không đỏ vì lý do này — nó bỏ qua khi máy chủ không có `tkvc` — nhưng cũng không thể dùng làm bằng chứng cho tới khi compiler hỗ trợ runtime-path.
 

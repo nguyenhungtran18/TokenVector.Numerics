@@ -71,50 +71,74 @@ Thư viện đóng vai trò là **Runtime Math & Tensor Engine Đa Ngành Toàn 
 
 ## 🧪 Kết quả Kiểm thử
 
-Toàn bộ **84/84 unit tests tự động** đã vượt qua thành công:
+### Tái lập được ngay hôm nay — `mathlib/` toán chính xác
+
+Các module `mathlib/` viết thuần TokenVector, không phụ thuộc `import tv`, nên biên dịch và chạy trọn vẹn bằng compiler native. Đã kiểm chứng lại ngày **25 tháng 9, 2026**:
+
 ```powershell
-dotnet test TokenVector.Numerics.sln -c Release
-```
-```text
-Passed!  - Failed: 0, Passed: 84, Skipped: 0, Total: 84, Duration: 179 ms - TokenVector.Numerics.Tests.dll (net8.0)
+tkvc build mathlib/bf_bigfloat.tkv      --out bf_bigfloat.exe      && ./bf_bigfloat.exe
+#    t1_sqrt2(100 cs)  t2_pi_chud(100 cs)  t3_e(100 cs)  t4_arith  t5_div  t6_bigmul
+#    t7_bignum_neg  t8_precision_borders        -> PASS 8 / 8 - bigfloat OK
+
+tkvc build mathlib/nt_number_theory.tkv --out nt_number_theory.exe && ./nt_number_theory.exe
+#    t1..t7  +  t8_i64_boundaries  t9_large_factorization
+#                                            -> PASS 9 / 9 - number_theory OK
 ```
 
-**Mới trong v1.1.0 — Thư viện chuẩn TokenVector (`.tkv`)**: thư viện nay phát hành cả bằng ngôn ngữ TokenVector (27 module, ~12.1k dòng) với **độ phủ 100% surface hàm số học** (354/354 đã audit) và bộ công cụ kiểm chứng riêng:
+| Module | Kết quả | Phạm vi kiểm chứng |
+| :--- | :---: | :--- |
+| `mathlib/bf_bigfloat.tkv` | **8 / 8 ĐẠT** | $\sqrt{2}$, $\pi$ (Chudnovsky) và $e$ (spigot) tới 100 chữ số đối chiếu tham chiếu độc lập; cộng/trừ/nhân/chia bignum; xử lý limb số âm; hành vi ở biên độ chính xác |
+| `mathlib/nt_number_theory.tkv` | **9 / 9 ĐẠT** | gcd/lcm, `isqrt`, phân tích thử nghiệm, `iroot`, `pow_mod` / Miller–Rabin / Pollard–Rho **không tràn**, AKS; thêm regression biên `i64` và phân tích số lớn |
+| `linalg` / `linalg_functions` / `fft` / `crypto_graph` | **36 / 36** | số phức cộng/trừ/nhân/chia/phủ bù/mô đun; matmul, det, trace, solve, inverse, QR, Cholesky ($A = LL^\top$), SVD, eigh; FFT đối chiếu oracle DFT độc lập với $N = 1,2,4,5,6,7,8,9$ và round-trip IFFT; round-trip NTT, tích chập đa thức tuần hoàn, Laplacian chuẩn hoá và không chuẩn hoá |
+
+**Lỗi phát hiện và đã sửa trong đợt này**
+
+| Module | Lỗi | Cách sửa |
+| :--- | :--- | :--- |
+| `bf_bigfloat.tkv` | hằng Chudnovsky sai `10939058825628000` | sửa thành `10939058860032000` (giá trị cũ sai từ khoảng chữ số thứ 14) |
+| `bf_bigfloat.tkv` | `bignum_neg` làm mất một limb hợp lệ | bỏ nhánh phủ bù, đảo dấu trực tiếp |
+| `bf_bigfloat.tkv` | `pi_chudnovsky` lấy thiếu độ chính xác và xử lý sai zero dẫn | nay lấy `len(den_digits) + prec_digits + 2`, bỏ zero dẫn rồi chuẩn hoá |
+| `nt_number_theory.tkv` | phép nhân/cộng modulo âm thầm tràn `i64` | thêm `mul_mod_i64` / `add_mod_i64`; `pow_mod`, Miller–Rabin và Pollard–Rho dùng qua đó |
+| `nt_number_theory.tkv` | `isqrt_i`, `trial_prime`, `factorize`, `iroot` tràn ở biên `i64` (`x + 1`, `i * i`, `p * p`) | mọi bước nhân trung gian nay đều được kiểm tra miền giá trị |
+
+Đã thêm các test hồi quy `t7_bignum_neg`, `t8_precision_borders`, `t8_i64_boundaries` và `t9_large_factorization` để chốt lại các bản sửa này.
+
+> **Lưu ý phạm vi.** Dòng 36/36 là **rà soát thuật toán ở mức mã nguồn** đối chiếu oracle độc lập — không phải lần chạy native của `linalg`/`fft`/`crypto_graph`, vì giới hạn compiler dưới đây đang chặn. Hai dòng 8/8 và 9/9 là kết quả chạy native thật.
+
+### Giới hạn đã biết — smoke suite 175 kiểm tra của stdlib
+
+Kết quả ghi nhận của bản phát hành v1.1.0 là **84/84** unit test runtime, **175/175** smoke check `.tkv` và **354/354** độ phủ surface hàm ([TEST_REPORT.md](TEST_REPORT.md)). Lệnh smoke được trích ở đó
+
 ```powershell
-python tests/tokenvector/tkv_harness.py
-#    TokenVector stdlib smoke tests: passed=175, failed=0
-python tests/tokenvector/numpy_coverage_audit.py
-#    matched in .tkv stdlib : 354 (100%) | truly missing: 0
+tkvc build tests/tokenvector/smoke_tests.tkv --entry main --out smoke.exe
 ```
+
+**không tái lập được** trên các bản `tkvc` không có tuỳ chọn runtime-path: compiler phân giải `import tv` theo thư mục đi kèm của chính nó và dừng với lỗi `File khong co ham top-level nao co annotation kieu DSL`, còn dạng `-r src/tokenvector` nêu trong phần đầu file không còn được `tkvc build` chấp nhận. Hãy xem 175/175 là **kết quả lưu của v1.1.0**, và dùng hai suite `mathlib` ở trên làm bài kiểm tra tái lập được.
+
 Xem [src/tokenvector/README.md](src/tokenvector/README.md) để biết bản đồ module, bảng độ phủ và benchmark hiệu năng.
 
 ---
 
 ## ⚡ Hiệu Năng & Kết Quả Benchmark
 
-Đo đạc trên nền tảng **AMD Ryzen / Intel x86_64** (Release build, .NET 8 LTS, SIMD AVX2/FMA native, 100% Core scaling qua `Parallel.For`):
+Số liệu dưới đây đo trên **compiler thật của ngôn ngữ** (`tkvc.exe`, hạ xuống CIL chạy native): 7 kernel viết thuần bằng TokenVector — cùng thuật toán với stdlib (matmul cache-tiled 32×32, SVD one-sided Jacobi, FFT radix-2/Bluestein) — biên dịch thành `.exe` độc lập, đo đối chiếu NumPy 2.5.2 trên cùng máy Windows x86_64, cùng số lần lặp mỗi phía, best-of-3, đã trừ startup overhead của process (~26 ms, đo bằng exe rỗng):
 
-| Phép toán | Tác vụ / Kích thước | Baseline Tiêu Chuẩn | TokenVector.Numerics (AVX2 + MT) | Tốc độ tăng |
-| :--- | :--- | :--- | :--- | :---: |
-| **Nhân Ma Trận (`MatMul`)** | $1024 \times 1024$ FP32 | 148.2 ms | **7.8 ms** (Cache-Tiled 32x32) | **19.0x** |
-| **Biến đổi Fourier 2D (`FFT2D`)** | $1024 \times 1024$ Complex64 | 82.5 ms | **6.1 ms** (Radix-2 + AVX2) | **13.5x** |
-| **Lan truyền ngược Autograd MLP**| 1000 vòng lặp ($B=64, D=128$) | 312.0 ms | **18.4 ms** (Zero-Alloc DAG) | **17.0x** |
-| **Độ tương đồng Vector Cosine** | $1,000,000 \times 128$-chiều | 195.4 ms | **11.2 ms** (AVX2 FMA Vector256) | **17.4x** |
-| **I/O Đĩa Ánh Xạ Out-of-Core** | Lát cắt Tensor $.npy$ $10\text{ GB}$ | 4,200 ms (Nạp đầy RAM) | **0.8 ms** (Zero-RAM `mmap`) | **5250x** |
+| Phép toán | Tác vụ / Kích thước | TokenVector (compiled) | NumPy 2.5.2 | Tốc độ |
+| :--- | :--- | ---: | ---: | :---: |
+| **Nhân Ma Trận** (cache-tiled 32×32) | 32×32 f64 | 2.28 ms | 6.2 µs | ~365× |
+| **Nhân Ma Trận** (cache-tiled 32×32) | 64×64 f64 | 17.5 ms | 23.4 µs | ~748× |
+| **Nhân Ma Trận** (cache-tiled 32×32) | 128×128 f64 | 151.9 ms | 116.1 µs | ~1308× |
+| **Cộng Phần Tử + Broadcast** | 2×131072 f64 | 6.05 ms | 849.7 µs | ~7.1× |
+| **SVD** (one-sided Jacobi, singular values) | 40×40 f64 | 303.0 ms | 161.1 µs | ~1880× |
+| **FFT Radix-2** | 1024 điểm | 688.9 µs | 40.0 µs | ~17.2× |
+| **FFT Bluestein** (chirp-z, N không lũy thừa 2) | 1000 điểm | 6.54 ms | 37.5 µs | ~174× |
 
-#### 🔑 5 Trụ Cột Tăng Tốc Kỹ Thuật:
-* **Vector Hóa Phần Cứng SIMD (AVX2 & FMA):** Xử lý đồng thời 8 số thực `float32` trong 1 chu kỳ xung nhịp CPU với độ chính xác cao.
-* **Kỹ Thuật Cache-Tiling $32 \times 32$:** Giữ các khối ma trận con vừa khít bộ nhớ đệm L1 Data Cache (độ trễ 1–4 ns), triệt tiêu nghẽn cổ chai bộ nhớ RAM.
-* **Đa Luồng Thực Thụ Không Bị Khóa (True No-GIL):** Tận dụng 100% tất cả nhân CPU qua `Parallel.For` mà không bị hiện tượng lock luồng.
-* **Quản Lý Bộ Nhớ Zero-GC & Con Trỏ Trực Tiếp:** Tái sử dụng vùng nhớ unmanaged qua `Span<T>` và `TensorBuffer<T>`, loại bỏ 0% thời gian dừng máy do Garbage Collector.
-* **Ánh Xạ Đĩa Out-of-Core (Zero-RAM `mmap`):** Truy xuất trực tiếp tensor hàng chục GB từ ổ NVMe qua kernel OS với độ trễ $< 1\text{ ms}$ và 0 MB RAM tiêu tốn.
+**Parity số học kiểm chứng từng kernel với NumPy:** checksum matmul/add (Σ, Σx²) khớp trong giới hạn float64; singular values SVD lệch LAPACK **2.4e-14**; hệ số FFT mẫu (X[1], X[N/2]) khớp tới **~1e-12**.
 
-#### 📐 Cơ Sở Tính Toán & Phương Pháp Đo Đạc:
-* **Nhân Ma Trận MatMul ($1024 \times 1024$, $2.15\text{ Tỷ FLOPs}$):** Duyệt 3 vòng lặp ngây thơ gây lỗi bộ nhớ đệm Cache Miss liên tục ($\sim 14.5\text{ GFLOPS} \rightarrow 148.2\text{ ms}$). TokenVector.Numerics chia nhỏ khối Tile $32 \times 32$ vừa khít L1 Cache $4\text{ KB}$ (băng thông $>1.5\text{ TB/s}$), kết hợp lệnh FMA (16 phép tính/chu kỳ) và 16 luồng `Parallel.For` đạt $\sim 275\text{ GFLOPS} \rightarrow \mathbf{7.8\text{ ms}}$.
-* **Biến Đổi Fourier 2D FFT ($\sim 105\text{ Triệu FLOPs}$):** Thay thế biến đổi tuần tự bằng thuật toán Cooley-Tukey Radix-2, nạp bảng Twiddle Factor lượng giác vào thanh ghi SIMD và xử lý song song các hàng/cột ($\mathbf{6.1\text{ ms}}$).
-* **Lan Truyền Ngược Autograd MLP (1000 vòng lặp, $B=64, D=128$):** Code thông thường liên tục phân bổ đối tượng trên heap kích hoạt Garbage Collector gây khựng CPU ($312.0\text{ ms}$). TokenVector.Numerics tái sử dụng buffer unmanaged tại chỗ trên đồ thị Zero-Alloc DAG ($\mathbf{18.4\text{ ms}}$).
-* **Độ Tương Đồng Cosine (1 Triệu Vector $\times 128$ Chiều, $512\text{ MB}$):** Sử dụng 3 thanh ghi AVX2 tính gộp cùng lúc Dot Product, NormA, NormB trong 1 lượt quét bộ nhớ duy nhất (Single-Pass), bão hòa tối đa băng thông RAM $\sim 45\text{ GB/s} \rightarrow \mathbf{11.2\text{ ms}}$.
-* **I/O Đĩa Ánh Xạ Out-of-Core ($10\text{ GB}$ $.npy$):** Loại bỏ việc nạp cả 10GB vào RAM mất $4.2\text{ s}$; thay vào đó kernel OS chỉ ánh xạ bảng trang ảo và nạp đúng 1 trang nhớ $4\text{ KB}$ khi truy cập, trả kết quả trong $\mathbf{0.8\text{ ms}}$ với 0 MB RAM chiếm dụng.
+#### 🔑 Đọc ratio thế nào cho đúng:
+* NumPy là thư viện C tinh chỉnh tay (SIMD/AVX2, LAPACK, pocketfft). Khoảng cách của bản compiled đến từ số học nguyên của tkvc chạy qua struct `TkvInt` (fast-path BigInteger) và lưu mảng bằng `List<T>` — không phải do thông dịch.
+* Đây là số của **bản compiled**: trước đây số đo qua verification harness (thông dịch trên thông dịch, 400–3000×) chậm hơn 3–250 lần ở cùng kernel.
+* Đo được tái lập: nguồn benchmark `bench_test.tkv` biên dịch bằng `tkvc.exe build bench_test.tkv --out bench_test.exe`, tách 1 kernel/exe, đo bằng wrapper nhỏ bên ngoài.
 
 ---
 

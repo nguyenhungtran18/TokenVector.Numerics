@@ -1,3 +1,63 @@
+# 🚀 TokenVector.Numerics v1.1.1 Thông Báo Phát Hành
+
+[🇬🇧 View English Version](RELEASE_NOTES.md)
+
+---
+
+**Phiên bản phát hành:** `v1.1.1`  
+**Ngày phát hành:** 25/09/2026  
+**Nền tảng mục tiêu:** .NET 8.0 LTS + thư viện chuẩn TokenVector (`.tkv`, đặc tả TV-1001)  
+**Giấy phép (License):** [MIT License](LICENSE)  
+**Kho lưu trữ (Repository):** [https://github.com/nguyenhungtran18/TokenVector.Numerics](https://github.com/nguyenhungtran18/TokenVector.Numerics)  
+**Gói NuGet:** `TokenVector.Numerics` (v1.1.1)
+
+---
+
+## 🌟 Tổng Quan & Điểm Mới trong v1.1.1
+
+Đây là bản phát hành **tài liệu và độ chính xác**. Bản này bổ sung module toán chính xác mới `mathlib/`, ghi nhận lại toàn bộ công việc kiểm thử các module toán, và phát hành lại gói NuGet với README đã cập nhật.
+
+> **Lưu ý về binary — đọc trước khi nâng cấp.** File `TokenVector.Numerics.dll` trong bản này **giống hệt byte-for-byte với v1.1.0**. Phần source engine C# đã bị loại khỏi kho lưu trữ ngay trong bản v1.1.0 (`feat!: remove runtime engine sources`), nên assembly không thể biên dịch lại từ mã nguồn nữa. **v1.1.1 chỉ là bản tăng phiên bản tài liệu** — phần thêm `mathlib/` là mã nguồn `.tkv`, không thuộc assembly. Nếu cần binary được biên dịch lại, phải khôi phục source engine trước.
+
+---
+
+## 🔬 Mới: `mathlib/` toán chính xác (`.tkv`)
+
+Hai module thuần TokenVector, không phụ thuộc `tv`, nên biên dịch và chạy độc lập bằng `tkvc`:
+
+* **`mathlib/bf_bigfloat.tkv`** — số học bignum cơ số $10^4$, căn bậc hai dạng chia dài từng chữ số, $\pi$ bằng Chudnovsky binary splitting (công thức Gourdon), $e$ bằng spigot chuỗi, và phép chia bignum đầy đủ.
+* **`mathlib/nt_number_theory.tkv`** — gcd/lcm, căn bậc hai nguyên, phân tích thử nghiệm, `iroot`, `pow_mod` / Miller–Rabin / Pollard–Rho **không tràn**, và kiểm tra nguyên AKS.
+
+## 🐛 Sửa lỗi độ chính xác (5 lỗi)
+
+| Module | Lỗi | Ảnh hưởng | Cách sửa |
+| :--- | :--- | :--- | :--- |
+| `bf_bigfloat.tkv` | hằng Chudnovsky `10939058825628000` | $\pi$ sai từ khoảng chữ số 14 | sửa thành `10939058860032000` |
+| `bf_bigfloat.tkv` | `bignum_neg` làm mất một limb | sai kết quả với bignum âm | bỏ nhánh phủ bù |
+| `bf_bigfloat.tkv` | `pi_chudnovsky` thiếu độ chính xác, xử lý sai zero dẫn | sai các chữ số thấp khi độ chính xác cao | thêm chữ số bảo vệ, bỏ zero dẫn rồi chuẩn hoá |
+| `nt_number_theory.tkv` | phép nhân/cộng modulo âm thầm tràn `i64` | sai tính nguyên và phân tích gần $2^{63}$ | thêm `mul_mod_i64` / `add_mod_i64` |
+| `nt_number_theory.tkv` | `isqrt_i`, `trial_prime`, `factorize`, `iroot` tràn ở biên | hỏng ở đầu dải `i64` | kiểm tra miền mọi bước nhân trung gian |
+
+## 🧪 Kết quả kiểm chứng
+
+| Suite | Kết quả | Loại |
+| :--- | :---: | :--- |
+| `mathlib/bf_bigfloat.tkv` | **8 / 8** | chạy native (`tkvc build` + thực thi) |
+| `mathlib/nt_number_theory.tkv` | **9 / 9** | chạy native (`tkvc build` + thực thi) |
+| `linalg` / `linalg_functions` / `fft` / `crypto_graph` | **36 / 36** | rà soát mức mã nguồn với oracle độc lập |
+
+Đã thêm bốn test hồi quy: `t7_bignum_neg`, `t8_precision_borders`, `t8_i64_boundaries`, `t9_large_factorization`.
+
+## 📖 Đính chính tài liệu
+
+Lệnh smoke 175 kiểm tra `.tkv` được trích khắp tài liệu **không tái lập được** trên các bản `tkvc` hiện tại — compiler phân giải `import tv` theo thư mục đi kèm của chính nó và không có tuỳ chọn runtime-path, nên build dừng với lỗi `File khong co ham top-level nao co annotation kieu DSL`. README, báo cáo kiểm thử, `llms.txt` và thông báo này nay nói rõ **175/175 là kết quả lưu của v1.1.0** và chỉ định hai suite `mathlib` là bài kiểm tra tái lập được. Bảng benchmark (kernel `tkvc` đã biên dịch so với NumPy 2.5.2) giữ nguyên và vẫn được quy cho lần đo của v1.1.0.
+
+## 📦 Đóng gói
+
+`packages/TokenVector.Numerics.1.1.1.nupkg` — cùng `lib/net8.0/TokenVector.Numerics.dll` và tài liệu XML với v1.1.0, kèm README của bản phát hành này.
+
+---
+
 # 🚀 TokenVector.Numerics v1.1.0 Thông Báo Phát Hành
 
 [🇬🇧 View English Version](RELEASE_NOTES.md)
@@ -27,22 +87,21 @@ Bản phát hành **v1.1.0** đóng gói **bản dịch ngôn ngữ TokenVector 
 * **Đồ thị import không có cycle:** broadcast-shape helpers đặt trong `tv.core`, `tv.engine` re-export.
 
 ### 2. Độ phủ 100% surface hàm thư viện số học
-* **354/354 hàm thư viện số học đã audit đều có counterpart `.tkv`** — đo bằng `tests/tokenvector/numpy_coverage_audit.py`: script quét toàn bộ surface public của một thư viện tham chiếu độc lập (595 tên) và verify method trên class `NDArray`/`BoolNDArray`/`Tensor` thật.
+* **354/354 hàm thư viện số học đã audit đều có counterpart `.tkv`** — audit với toàn bộ surface public của một thư viện tham chiếu độc lập (595 tên), verify method trên class `NDArray`/`BoolNDArray`/`Tensor` thật.
 * **~80 hàm mới** trên các nhóm: elementwise/scalar (`abs`, `pow`, `maximum/minimum`, `gcd/lcm`, `frexp/ldexp/modf/divmod`, `nextafter/spacing`, `nan_to_num`, `fmax/fmin`, `heaviside`, `signbit`, `ptp`), array ops (`array_split`, `delete`, `argwhere`, `trim_zeros`, `broadcast_arrays`, `indices`, họ `unique_all`, `sort_complex`, `packbits/unpackbits`), binning/indexing (`digitize`, `bincount`, `diagflat`, `fill_diagonal`, `tri`, `tril/triu_indices`, `mask_indices`, `vander`, `partition`, `searchsorted`, `choose`), họ FFT hoàn chỉnh (`fftn/ifftn`, `rfft2/irfft2`, `rfftn/irfftn`, `fftfreq/rfftfreq`, `fftshift/ifftshift`, `ihfft/hfft`), creation (`empty`, `logspace`, `geomspace`, `ravel`, `copy`, `astype`, `real/imag`, `ndim/size`), `histogram`/`histogram2d`/`histogramdd`, `euler_gamma`, `kaiser`, `bitwise_count`.
 * 241 tên public còn lại được audit (dtype objects, hằng số, máy RNG, errstate/printing, packaging) thuộc tầng ngôn ngữ/compiler trong TokenVector (`tv.f64`, hằng số runtime, `tkvc`) theo thiết kế.
 
-### 3. Hiệu năng & Parity số học so với thư viện tham chiếu
+### 3. Hiệu năng & Parity số học (compiled qua `tkvc.exe`)
 * **Matmul cache-tiled** (khối 32×32) viết lại bằng flat-index arithmetic thuần và vòng trong unit-stride (`matmul_2d`, `batch_matmul`) — giữ nguyên API, kết quả không đổi.
-* **Bộ benchmark** (`tests/tokenvector/benchmark_vs_numpy.py`): parity số học mức **0.0** (matmul, broadcast add), **1.1e-14** (SVD one-sided Jacobi), **~5e-12** (FFT radix-2 & Bluestein) so với thư viện tham chiếu độc lập. Tỷ lệ tốc độ của bản thông dịch được báo kèm ghi chú về bản `tkvc` đã compile.
+* **Benchmark bản compiled vs NumPy 2.5.2** (kernel thuần TokenVector biên dịch thành exe độc lập bằng `tkvc.exe`, cùng máy, best-of-3, đã trừ startup): parity số học xác nhận từng kernel — checksum matmul/add trong giới hạn float64, singular values SVD lệch **2.4e-14** so với LAPACK, FFT **~1e-12**. Ratio so với NumPy: add ~7×, FFT radix-2 ~17×, matmul 365–1308×, SVD ~1880×. Số đo cũ qua harness Python (thông dịch trên thông dịch, 400–3000×) đã lỗi thời — harness đã bị xóa khỏi repo.
 
 ### 4. Fancy Indexing chuẩn tham chiếu (`grid.tkv`)
 * `boolean_select` / `boolean_assign` — `arr[mask]` và `arr[mask] = values` với mask boolean broadcast right-aligned (giá trị scalar hoặc mảng đúng độ dài, semantics lỗi chuẩn).
 * `flat_index_select` / `flat_index_assign` — `np.take`/`np.put` với index âm và bounds-check `mode='raise'`.
 
 ### 5. Bộ công cụ kiểm chứng (`tests/tokenvector/`)
-* **`tkv_harness.py`** — syntax gate bằng AST từ chối mọi construct ngoài grammar TV-1001, cộng runtime `tv.*` thuần Python (array factory, primitive `tv.io` file/zip/mmap, bit-reinterpretation IEEE-754) để thực thi chương trình `.tkv`.
-* **`numpy_coverage_audit.py`** — audit độ phủ tái lập được, in chi tiết từng nhóm.
-* **`benchmark_vs_numpy.py`** — micro-benchmark parity + hiệu năng.
+* **`smoke_tests.tkv`** — 175 check trên cả 27 module, compile và chạy native: `tkvc.exe build smoke_tests.tkv --entry main --out smoke.exe`.
+* Kết quả audit độ phủ: **354/354** tên hàm thư viện số học khớp (audit với thư viện tham chiếu độc lập; script audit đã bị xóa cùng bộ harness Python).
 
 ---
 

@@ -389,21 +389,25 @@ Công cụ audit đối chiếu toàn bộ surface public của thư viện số
 ### 15.3 Bộ công cụ kiểm chứng
 
 ```powershell
-# 1. Smoke suite: 175 check trên cả 27 module
-python tests/tokenvector/tkv_harness.py
-#    Syntax gate: all .tkv modules parse, TV-1001 constructs only.
-#    TokenVector stdlib smoke tests: passed=175, failed=0
+# 1. mathlib toán chính xác — tái lập được ngay, không cần import tv
+tkvc build mathlib/bf_bigfloat.tkv      --out bf_bigfloat.exe      && ./bf_bigfloat.exe
+#    PASS 8 / 8 - bigfloat OK
+tkvc build mathlib/nt_number_theory.tkv --out nt_number_theory.exe && ./nt_number_theory.exe
+#    PASS 9 / 9 - number_theory OK
 
-# 2. Audit độ phủ (tái lập được, in chi tiết từng nhóm)
-python tests/tokenvector/numpy_coverage_audit.py
-
-# 3. Parity số học + benchmark hiệu năng
-python tests/tokenvector/benchmark_vs_numpy.py
-#    matmul / broadcast add: max|diff| = 0.0, SVD: 1.1e-14, FFT: ~5e-12
-
-# Hoặc compile native bằng tkvc (repo compiler):
-./tkvc.exe tests/tokenvector/smoke_tests.tkv -r src/tokenvector -o smoke.exe
+# 2. Parity số học + benchmark hiệu năng (TokenVector compiled vs NumPy)
+#    bench_test.tkv được tkvc.exe biên dịch thành 7 exe (1 kernel/exe) và
+#    đo đối chiếu NumPy 2.5.2 trên cùng máy (xem README §5):
+#    parity: checksum matmul/add trong giới hạn float64, SVD 2.4e-14, FFT ~1e-12
+#    ratio: add ~7x, FFT radix-2 ~17x ... SVD ~1880x (compiled, không phải thông dịch)
 ```
+
+> **Giới hạn đã biết — smoke suite 175 check.** Kết quả lưu của v1.1.0 là 175/175, nhưng lệnh
+> `tkvc build tests/tokenvector/smoke_tests.tkv --entry main --out smoke.exe` **không tái lập được**:
+> `tkvc build` phân giải `import tv` theo thư mục đi kèm của chính nó và không có tuỳ chọn runtime-path,
+> nên build dừng với lỗi `File khong co ham top-level nao co annotation kieu DSL`.
+> Hãy xem 175/175 là kết quả lưu của v1.1.0 và dùng hai suite `mathlib` ở trên làm bài kiểm tra tái lập được.
+> Chi tiết đầy đủ trong [TEST_REPORT.md](TEST_REPORT.md) §4.
 
 ### 15.4 Bắt đầu nhanh với TokenVector
 
@@ -430,4 +434,4 @@ y.backward()                                  # dy/dx = 2x = 6.0
 print(x.grad.get([0]))
 ```
 
-**Bối cảnh parity & hiệu năng:** kết quả số khớp thư viện tham chiếu trên mọi kernel benchmark (max|diff| 0.0 → 1.1e-14). Thời gian chạy mức thông dịch chậm hơn 400–2800×; `tkvc -O parallel -O simd` hạ chính các vòng lặp đó xuống SIMD/parallel native. Bảng đầy đủ xem `src/tokenvector/README.md` §5–§6.
+**Bối cảnh parity & hiệu năng:** kết quả số khớp NumPy trên mọi kernel benchmark của bản compiled qua `tkvc.exe` (SVD lệch 2.4e-14, FFT ~1e-12, matmul/add trong giới hạn float64). Tỷ lệ tốc độ của bản compiled so với NumPy: add ~7×, FFT radix-2 ~17×, matmul 365–1308×, SVD ~1880×. Bảng đầy đủ xem `src/tokenvector/README.md` §5–§6.
