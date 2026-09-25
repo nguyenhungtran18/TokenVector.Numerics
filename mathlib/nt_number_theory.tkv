@@ -1,0 +1,493 @@
+# nt_number_theory.tkv — Ly thuyet so thuat toan (100% pure TokenVector)
+# Miller-Rabin deterministic (witnesses 2..37, chinh xac cho n < 3.3e24),
+# Pollard's rho phan tich thua so, AKS-lite (Agrawal-Kayal-Saxena: buoc
+# 1-4 chinh xac + Fermat-witness screening, co gioi han r cho pham vi
+# giao duc), isqrt Newton, Euler totient. Moi test doi chieu tham chieu
+# doc lap (thu chia hoac cong thuc dong).
+
+def gcd_i(a: "i64", b: "i64") -> "i64":
+    if b == 0:
+        if a < 0:
+            return -a
+        return a
+    return gcd_i(b, a - (a // b) * b)
+
+
+def isqrt_i(n: "i64") -> "i64":
+    if n < 0:
+        return -1
+    if n < 2:
+        return n
+    x = n
+    y = x // 2
+    if x % 2 != 0:
+        y = y + 1
+    while y < x:
+        x = y
+        y = (x + n // x) // 2
+    return x
+
+
+def mul_mod_i64(a: "i64", b: "i64", m: "i64") -> "i64":
+    # Nhan modulo bang chia doi bien, khong tao a*b (tran du duong i64).
+    if m <= 0:
+        return 0
+    a = a % m
+    if a < 0:
+        a = a + m
+    b = b % m
+    if b < 0:
+        b = b + m
+    result = 0
+    while b > 0:
+        if b % 2 == 1:
+            if result >= m - a:
+                result = a - (m - result)
+            else:
+                result = result + a
+        b = b // 2
+        if b > 0:
+            if a >= m - a:
+                a = a - (m - a)
+            else:
+                a = a + a
+    return result
+
+
+def add_mod_i64(a: "i64", b: "i64", m: "i64") -> "i64":
+    if m <= 0:
+        return 0
+    a = a % m
+    if a < 0:
+        a = a + m
+    b = b % m
+    if b < 0:
+        b = b + m
+    if b >= m - a:
+        return a - (m - b)
+    return a + b
+
+
+def pow_mod(base: "i64", exp: "i64", m: "i64") -> "i64":
+    if m <= 0 or exp < 0:
+        return 0
+    if m == 1:
+        return 0
+    r = 1
+    b = base % m
+    if b < 0:
+        b = b + m
+    e = exp
+    while e > 0:
+        if e % 2 == 1:
+            r = mul_mod_i64(r, b, m)
+        b = mul_mod_i64(b, b, m)
+        e = e // 2
+    return r
+
+
+def trial_prime(n: "i64") -> "i32":
+    if n < 2:
+        return 0
+    if n < 4:
+        return 1
+    if n % 2 == 0:
+        return 0
+    i = 3
+    while i <= n // i:
+        if n % i == 0:
+            return 0
+        i = i + 2
+    return 1
+
+
+def miller_rabin(n: "i64") -> "i32":
+    # Deterministic voi 12 witness cho moi n < 3.3e24 (Sorenson-Webster).
+    # Nhan modulo dung mul_mod_i64 nen an toan tren toan bo duong i64.
+    if n < 2:
+        return 0
+    small = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37]
+    i = 0
+    while i < 12:
+        if n == small[i]:
+            return 1
+        if n % small[i] == 0:
+            return 0
+        i = i + 1
+    d = n - 1
+    s = 0
+    while d % 2 == 0:
+        d = d // 2
+        s = s + 1
+    iw = 0
+    while iw < 12:
+        a = small[iw]
+        x = pow_mod(a, d, n)
+        ok = 0
+        if x == 1:
+            ok = 1
+        if x == n - 1:
+            ok = 1
+        j = 0
+        while j < s:
+            if ok == 0:
+                x = mul_mod_i64(x, x, n)
+                if x == n - 1:
+                    ok = 1
+            j = j + 1
+        if ok == 0:
+            return 0
+        iw = iw + 1
+    return 1
+
+
+def pollard_rho(n: "i64") -> "i64":
+    # Tra ve 1 thua so khong tam thuong cua n (n hop so, le), 0 neu that bai.
+    if n % 2 == 0:
+        return 2
+    c = 1
+    while c < 20:
+        x = 2
+        y = 2
+        d = 1
+        while d == 1:
+            x = add_mod_i64(mul_mod_i64(x, x, n), c, n)
+            y = add_mod_i64(mul_mod_i64(y, y, n), c, n)
+            y = add_mod_i64(mul_mod_i64(y, y, n), c, n)
+            d = gcd_i(x - y, n)
+            if x == y:
+                d = n
+        if d != n:
+            return d
+        c = c + 1
+    return 0
+
+
+def factorize(n: "i64", out: "list[i64]", out_e: "list[i64]") -> "i32":
+    m = n
+    cnt = 0
+    p = 2
+    while p <= m // p:
+        if m % p == 0:
+            e = 0
+            while m % p == 0:
+                m = m // p
+                e = e + 1
+            out.append(p)
+            out_e.append(e)
+            cnt = cnt + 1
+        if p == 2:
+            p = 3
+        else:
+            p = p + 2
+    if m > 1:
+        out.append(m)
+        out_e.append(1)
+        cnt = cnt + 1
+    return cnt
+
+
+def totient(n: "i64") -> "i64":
+    pr = []
+    ex = []
+    k = factorize(n, pr, ex)
+    r = n
+    i = 0
+    while i < k:
+        r = r - r // pr[i]
+        i = i + 1
+    return r
+
+
+def iroot(n: "i64", b: "i32") -> "i64":
+    # Can bac b nguyen cua n (Newton), tra ve a sao cho a^b == n, neu khong
+    # co so nguyen chinh xac thi tra ve 0.
+    if n < 0 or b < 2 or b > 62:
+        return 0
+    if n < 2:
+        return n
+    # 2^(63//b) bang vong nhan (toan tu << cua tkvc sinh mul.ovf khi tran
+    # kieu; ket qua trung gian toi da 2^60 nam trong i64 - xem phan tich).
+    shift = 63 // b
+    x = 1
+    si = 0
+    while si < shift:
+        x = x * 2
+        si = si + 1
+    y = x - 1
+    while y < x:
+        x = y
+        p = 1
+        i = 0
+        while i < b - 1:
+            p = p * x
+            i = i + 1
+        if p > n // x:
+            p = n
+        y = ((b - 1) * x + n // p) // b
+    chk = 1
+    i = 0
+    while i < b:
+        if chk > n // x:
+            return 0
+        chk = chk * x
+        i = i + 1
+    if chk == n:
+        return x
+    return 0
+
+
+def aks_prime(n: "i64") -> "i32":
+    # AKS-lite: buoc 1-3 (perfect power) chinh xac, buoc 4 (order search
+    # tren ring Z_r voi r co ord_r(n) > 4*log2(n)^2, gioi han r < 5000),
+    # buoc 5 thay bang Fermat-witness screening a^n = a (mod n) voi
+    # a <= sqrt(r). Tra ve -1 neu vuot gioi han (khong ket luan).
+    if n < 2:
+        return 0
+    if n < 4:
+        return 1
+    if n % 2 == 0:
+        return 0
+    b = 2
+    while b < 40:
+        r = iroot(n, b)
+        if r > 1:
+            p = 1
+            i = 0
+            while i < b:
+                p = p * r
+                i = i + 1
+            if p == n:
+                return 0
+        b = b + 1
+    log2n = 0
+    t = n
+    while t > 1:
+        t = t // 2
+        log2n = log2n + 1
+    lim = 4 * log2n * log2n
+    r = 2
+    r_found = 0
+    while r < 5000:
+        if r_found == 0:
+            if gcd_i(n % r, r) == 1:
+                k = 1
+                cur = n % r
+                hit_one = 0
+                while k <= lim:
+                    if hit_one == 0:
+                        cur = (cur * (n % r)) % r
+                        if cur == 1:
+                            hit_one = 1
+                    k = k + 1
+                if hit_one == 0:
+                    r_found = r
+        r = r + 1
+    if r_found == 0:
+        return -1
+    # Buoc 5 (screening): moi a <= sqrt(r_found): gcd(a,n)=1 va a^n = a (mod n)
+    amax = isqrt_i(r_found)
+    a = 2
+    while a <= amax:
+        if a < n:
+            if gcd_i(a, n) != 1:
+                return 0
+            if pow_mod(a, n, n) != a:
+                return 0
+        a = a + 1
+    return 1
+
+
+# ---------------- KIEM THU ----------------
+
+def t1_mr_vs_trial() -> "i32":
+    i = 0
+    while i <= 2000:
+        if miller_rabin(i) != trial_prime(i):
+            return 0
+        i = i + 1
+    return 1
+
+
+def t2_mr_big() -> "i32":
+    if miller_rabin(2147483647) != 1:
+        return 0
+    if miller_rabin(1000000007) != 1:
+        return 0
+    if miller_rabin(561) != 0:
+        return 0
+    if miller_rabin(41041) != 0:
+        return 0
+    if miller_rabin(1105) != 0:
+        return 0
+    return 1
+
+
+def t3_pollard() -> "i32":
+    d = pollard_rho(10403)
+    if d == 0:
+        return 0
+    if 10403 % d != 0:
+        return 0
+    if d == 1 or d == 10403:
+        return 0
+    if trial_prime(d) != 1:
+        return 0
+    if trial_prime(10403 // d) != 1:
+        return 0
+    d2 = pollard_rho(8051)
+    if d2 == 0 or 8051 % d2 != 0 or d2 == 1 or d2 == 8051:
+        return 0
+    return 1
+
+
+def t4_factorize() -> "i32":
+    pr = []
+    ex = []
+    k = factorize(900, pr, ex)
+    if k != 3:
+        return 0
+    if pr[0] != 2 or pr[1] != 3 or pr[2] != 5:
+        return 0
+    if ex[0] != 2 or ex[1] != 2 or ex[2] != 2:
+        return 0
+    m = 1
+    i = 0
+    while i < k:
+        j = 0
+        while j < ex[i]:
+            m = m * pr[i]
+            j = j + 1
+        i = i + 1
+    if m != 900:
+        return 0
+    return 1
+
+
+def t5_totient() -> "i32":
+    if totient(100) != 40:
+        return 0
+    if totient(1) != 1:
+        return 0
+    if totient(97) != 96:
+        return 0
+    if totient(36) != 12:
+        return 0
+    if totient(900) != 240:
+        return 0
+    return 1
+
+
+def t6_aks() -> "i32":
+    i = 0
+    while i <= 200:
+        a = aks_prime(i)
+        if a == -1:
+            return 0
+        if a != trial_prime(i):
+            return 0
+        i = i + 1
+    cases = [561, 1105, 1729, 2465, 2821, 6601, 8911, 10561,
+             15841, 29341, 41041, 46657, 52633, 62745, 63973,
+             75361, 997, 1009, 65537]
+    i = 0
+    while i < len(cases):
+        if aks_prime(cases[i]) != trial_prime(cases[i]):
+            return 0
+        i = i + 1
+    return 1
+
+
+def t7_isqrt() -> "i32":
+    if isqrt_i(1000000000000000000) != 1000000000:
+        return 0
+    if isqrt_i(999999999999999999) != 999999999:
+        return 0
+    if isqrt_i(2) != 1:
+        return 0
+    if isqrt_i(0) != 0:
+        return 0
+    return 1
+
+
+def t8_i64_boundaries() -> "i32":
+    m = 9223372036854775783
+    if mul_mod_i64(m - 1, m - 1, m) != 1:
+        return 0
+    if add_mod_i64(m - 1, 2, m) != 1:
+        return 0
+    if pow_mod(3037000499, 3037000499, m) != 666757900623444812:
+        return 0
+    if pow_mod(9223372036854775806, 123456789, m) != 367606856440746069:
+        return 0
+    if pow_mod(1414213562373095, 2, 1000000007) != 980159256:
+        return 0
+    if isqrt_i(9223372036854775807) != 3037000499:
+        return 0
+    if gcd_i(-48, 18) != 6:
+        return 0
+    if iroot(243, 5) != 3:
+        return 0
+    if iroot(9223372036854775807, 2) != 0:
+        return 0
+    if iroot(2, 63) != 0:
+        return 0
+    if miller_rabin(9223372036854775783) != 1:
+        return 0
+    if miller_rabin(9223372036854775806) != 0:
+        return 0
+    return 1
+
+
+def t9_large_factorization() -> "i32":
+    pr = []
+    ex = []
+    k = factorize(4611685975477714963, pr, ex)
+    if k != 2:
+        return 0
+    if pr[0] != 2147483629 or pr[1] != 2147483647:
+        return 0
+    if ex[0] != 1 or ex[1] != 1:
+        return 0
+    d = pollard_rho(1000000016000000063)
+    if d == 0 or d == 1 or d == 1000000016000000063:
+        return 0
+    if 1000000016000000063 % d != 0:
+        return 0
+    if trial_prime(d) != 1 or trial_prime(1000000016000000063 // d) != 1:
+        return 0
+    return 1
+
+
+def main() -> "i32":
+    total = 9
+    npass = 0
+    if t1_mr_vs_trial() == 1:
+        npass = npass + 1
+    if t2_mr_big() == 1:
+        npass = npass + 1
+    if t3_pollard() == 1:
+        npass = npass + 1
+    if t4_factorize() == 1:
+        npass = npass + 1
+    if t5_totient() == 1:
+        npass = npass + 1
+    if t6_aks() == 1:
+        npass = npass + 1
+    if t7_isqrt() == 1:
+        npass = npass + 1
+    if t8_i64_boundaries() == 1:
+        npass = npass + 1
+        print("t8_i64_boundaries: OK")
+    else:
+        print("t8_i64_boundaries: FAIL")
+    if t9_large_factorization() == 1:
+        npass = npass + 1
+        print("t9_large_factorization: OK")
+    else:
+        print("t9_large_factorization: FAIL")
+    if npass == total:
+        print("PASS", npass, "/", total, "- number_theory OK")
+    else:
+        print("FAIL", npass, "/", total, "- number_theory")
+    return 0

@@ -1,0 +1,822 @@
+# bf_bigfloat.tkv — So hoc do chinh xac tuy y (100% pure TokenVector)
+# Bignum co so 10^4 (limb i64, limbs[0] = chu so thap nhat). Thuat toan:
+# sqrt bignum digit-by-digit (ky thuat long-division cua can bac), pi bang
+# Chudnovsky binary splitting (P/Q/T deu la bignum, cong thuc Gourdon:
+# pi*10^p = 426880 * sqrt(10005*10^(2p)) * Q // T), e bang spigot giai
+# thua (khong can giai thua lon), chia bignum digit-by-digit day du.
+# Kiem thu: 100 chu so dau cua sqrt(2), pi, e doi chieu tham chieu doc lap.
+
+BASE = 10000
+BASE_DIGITS = 4
+
+
+def bignum_from_i64(v: "i64", out: "list[i64]") -> "i32":
+    t = v
+    if t < 0:
+        t = -t
+    if t == 0:
+        out.append(0)
+        return 1
+    n = 0
+    while t > 0:
+        out.append(t % BASE)
+        t = t // BASE
+        n = n + 1
+    return n
+
+
+def bignum_mul_small(a: "list[i64]", na: "i32", m: "i64", out: "list[i64]") -> "i32":
+    carry = 0
+    i = 0
+    while i < na:
+        cur = a[i] * m + carry
+        out.append(cur % BASE)
+        carry = cur // BASE
+        i = i + 1
+    while carry > 0:
+        out.append(carry % BASE)
+        carry = carry // BASE
+    return len(out)
+
+
+def bignum_mul(a: "list[i64]", na: "i32", b: "list[i64]", nb: "i32") -> "list[i64]":
+    res = []
+    total = na + nb
+    i = 0
+    while i < total:
+        res.append(0)
+        i = i + 1
+    i = 0
+    while i < na:
+        if a[i] != 0:
+            carry = 0
+            j = 0
+            while j < nb:
+                cur = res[i + j] + a[i] * b[j] + carry
+                res[i + j] = cur % BASE
+                carry = cur // BASE
+                j = j + 1
+            k = i + nb
+            while carry > 0:
+                cur = res[k] + carry
+                res[k] = cur % BASE
+                carry = cur // BASE
+                k = k + 1
+        i = i + 1
+    while len(res) > 1 and res[len(res) - 1] == 0:
+        res.pop()
+    return res
+
+
+def bignum_add(a: "list[i64]", na: "i32", b: "list[i64]", nb: "i32") -> "list[i64]":
+    res = []
+    carry = 0
+    n = na
+    if nb > n:
+        n = nb
+    i = 0
+    while i < n:
+        cur = carry
+        if i < na:
+            cur = cur + a[i]
+        if i < nb:
+            cur = cur + b[i]
+        res.append(cur % BASE)
+        carry = cur // BASE
+        i = i + 1
+    while carry > 0:
+        res.append(carry % BASE)
+        carry = carry // BASE
+    return res
+
+
+def bignum_sub(a: "list[i64]", na: "i32", b: "list[i64]", nb: "i32") -> "list[i64]":
+    res = []
+    borrow = 0
+    i = 0
+    while i < na:
+        s = a[i] - borrow
+        if i < nb:
+            s = s - b[i]
+        if s < 0:
+            s = s + BASE
+            borrow = 1
+        else:
+            borrow = 0
+        res.append(s)
+        i = i + 1
+    while len(res) > 1 and res[len(res) - 1] == 0:
+        res.pop()
+    return res
+
+
+def bignum_cmp(a: "list[i64]", na: "i32", b: "list[i64]", nb: "i32") -> "i32":
+    if na != nb:
+        if na > nb:
+            return 1
+        return -1
+    i = na - 1
+    while i >= 0:
+        if a[i] != b[i]:
+            if a[i] > b[i]:
+                return 1
+            return -1
+        i = i - 1
+    return 0
+
+
+def bignum_to_string(a: "list[i64]", na: "i32", frac: "i32", out: "list[i64]") -> "i32":
+    # Ghi cac chu so (thu tu doc: digit cao nhat truoc) vao out, bo so 0
+    # dan dau (giu it nhat 1 digit cho so 0). Tra ve so chu so.
+    raw = []
+    i = na - 1
+    first = 1
+    while i >= 0:
+        v = a[i]
+        d3 = v // 1000
+        d2 = (v // 100) % 10
+        d1 = (v // 10) % 10
+        d0 = v % 10
+        if first == 1:
+            first = 0
+            emit = 0
+            if d3 > 0:
+                emit = 1
+            if emit == 1:
+                raw.append(d3)
+            if d2 > 0 or emit == 1:
+                raw.append(d2)
+                emit = 1
+            if d1 > 0 or emit == 1:
+                raw.append(d1)
+                emit = 1
+            raw.append(d0)
+        else:
+            raw.append(d3)
+            raw.append(d2)
+            raw.append(d1)
+            raw.append(d0)
+        i = i - 1
+    # bo so 0 dan dau (raw[0] la digit cao nhat), giu it nhat 1 digit
+    s = 0
+    n = len(raw)
+    done = 0
+    while s < n - 1 and done == 0:
+        if raw[s] != 0:
+            done = 1
+        else:
+            s = s + 1
+    i = s
+    nd = 0
+    while i < n:
+        out.append(raw[i])
+        nd = nd + 1
+        i = i + 1
+    return nd
+
+
+def digits_to_bignum(d: "list[i64]", n: "i32") -> "list[i64]":
+    # Chu so (thu tu doc) -> bignum limb
+    res = []
+    pos = n
+    while pos > 0:
+        lo = pos - 4
+        if lo < 0:
+            lo = 0
+        v = 0
+        i = lo
+        while i < pos:
+            v = v * 10 + d[i]
+            i = i + 1
+        res.append(v)
+        pos = lo
+    return res
+
+
+# ---- sqrt bignum digit-by-digit (long-division style) ----
+
+def sqrt_bignum(a: "list[i64]", na: "i32", prec_digits: "i32") -> "list[i64]":
+    # Tra ve bignum floor(sqrt(a * 10^(2*prec_digits))) — tuc floor(sqrt(a))
+    # voi prec_digits chu so sau dau phay (scaled 10^p).
+    shift_digits = 2 * prec_digits
+    full_limbs = shift_digits // BASE_DIGITS
+    rem_digits = shift_digits % BASE_DIGITS
+    xs = []
+    i = 0
+    while i < full_limbs:
+        xs.append(0)
+        i = i + 1
+    i = 0
+    while i < na:
+        xs.append(a[i])
+        i = i + 1
+    if rem_digits > 0:
+        mul = 1
+        i = 0
+        while i < rem_digits:
+            mul = mul * 10
+            i = i + 1
+        tmp = []
+        bignum_mul_small(xs, len(xs), mul, tmp)
+        xs = tmp
+    # Thuat toan digit-by-digit dung: moi buoc MANG XUONG 8 chu so (co so
+    # r^2 voi r = 10^4 la 10^8), he so c = (2*r*p + d)*d, p = p*r + d.
+    # (voi r = 10 thi quen biet: mang 2 chu so, c = (20p + d)*d.)
+    shift_digits = 2 * prec_digits
+    full_limbs = shift_digits // BASE_DIGITS
+    rem_digits = shift_digits % BASE_DIGITS
+    xs = []
+    i = 0
+    while i < full_limbs:
+        xs.append(0)
+        i = i + 1
+    i = 0
+    while i < na:
+        xs.append(a[i])
+        i = i + 1
+    if rem_digits > 0:
+        mul = 1
+        i = 0
+        while i < rem_digits:
+            mul = mul * 10
+            i = i + 1
+        tmp = []
+        bignum_mul_small(xs, len(xs), mul, tmp)
+        xs = tmp
+    # gom thanh chunk co so 10^8 (2 limb 10^4), phu 1 limb 0 neu le
+    if len(xs) % 2 == 1:
+        xs.append(0)
+    chunks = []
+    i = 0
+    while i < len(xs):
+        chunks.append(xs[i] + xs[i + 1] * BASE)
+        i = i + 2
+    p = []
+    p.append(0)
+    rem = []
+    rem.append(0)
+    i = len(chunks) - 1
+    while i >= 0:
+        t1 = []
+        bignum_mul_small(rem, len(rem), 100000000, t1)
+        t2 = []
+        bignum_from_i64(chunks[i], t2)
+        rem = bignum_add(t1, len(t1), t2, len(t2))
+        p2 = []
+        bignum_mul_small(p, len(p), 2 * BASE, p2)
+        lo = 0
+        hi = BASE - 1
+        best = 0
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            dt = []
+            bignum_from_i64(mid, dt)
+            pt = bignum_add(p2, len(p2), dt, len(dt))
+            c = bignum_mul(pt, len(pt), dt, len(dt))
+            if bignum_cmp(c, len(c), rem, len(rem)) <= 0:
+                best = mid
+                lo = mid + 1
+            else:
+                hi = mid - 1
+        d = best
+        if d > 0:
+            dt = []
+            bignum_from_i64(d, dt)
+            pt = bignum_add(p2, len(p2), dt, len(dt))
+            c = bignum_mul(pt, len(pt), dt, len(dt))
+            rem = bignum_sub(rem, len(rem), c, len(c))
+            pt2 = []
+            bignum_mul_small(p, len(p), BASE, pt2)
+            p = bignum_add(pt2, len(pt2), dt, len(dt))
+        else:
+            pt2 = []
+            bignum_mul_small(p, len(p), BASE, pt2)
+            p = pt2
+        i = i - 1
+    return p
+
+
+# ---- Chia bignum, tra ve chu so thuong (thu tu doc) ----
+
+def bignum_neg(a: "list[i64]", na: "i32") -> "list[i64]":
+    # -a bang phu co so B: (B^n - 1 - a) + 1; giu lai cac limb co y nghia
+    res = []
+    i = 0
+    while i < na:
+        res.append(BASE - 1 - a[i])
+        i = i + 1
+    one = []
+    one.append(1)
+    res2 = bignum_add(res, len(res), one, 1)
+    while len(res2) > 1 and res2[len(res2) - 1] == 0:
+        res2.pop()
+    return res2
+
+
+def bignum_halve_exact(a: "list[i64]", na: "i32") -> "list[i64]":
+    # a / 2 (a chan): chia limb tu cao xuong thap, carry * BASE
+    res = []
+    i = na - 1
+    carry = 0
+    while i >= 0:
+        cur = carry * BASE + a[i]
+        res.append(cur // 2)
+        carry = cur % 2
+        i = i - 1
+    res.reverse()
+    while len(res) > 1 and res[len(res) - 1] == 0:
+        res.pop()
+    return res
+
+
+def bignum_div_to_digits(num: "list[i64]", den: "list[i64]", n_digits: "i32", out: "list[i64]") -> "i32":
+    # Chia bignum num/den, lay n_digits chu so thap phan dau (thu tu doc).
+    numd = []
+    nd = bignum_to_string(num, len(num), 0, numd)
+    dend = []
+    bignum_to_string(den, len(den), 0, dend)
+    denb = digits_to_bignum(dend, len(dend))
+    r = []
+    r.append(0)
+    cnt = 0
+    idx = 0
+    while cnt < n_digits:
+        d = 0
+        if idx < nd:
+            d = numd[idx]
+            idx = idx + 1
+        t1 = []
+        bignum_mul_small(r, len(r), 10, t1)
+        t2 = []
+        bignum_from_i64(d, t2)
+        r = bignum_add(t1, len(t1), t2, len(t2))
+        q = 0
+        go = 1
+        while go == 1 and q < 9:
+            c = []
+            bignum_mul_small(denb, len(denb), q + 1, c)
+            if bignum_cmp(c, len(c), r, len(r)) <= 0:
+                q = q + 1
+            else:
+                go = 0
+        c = []
+        bignum_mul_small(denb, len(denb), q, c)
+        r = bignum_sub(r, len(r), c, len(c))
+        out.append(q)
+        cnt = cnt + 1
+    return cnt
+
+
+def bs_chudnovsky(a: "i64", b: "i64") -> "list[i64]":
+    # Goi goi: [nP, P(nP limb), nQ, Q(nQ limb), nT, sT, T(nT limb)]
+    # P, Q LUON duong (tich cac nhan tu); chi T mang dau (-1)^k qua sT.
+    if b - a == 1:
+        if a == 0:
+            Pl = []
+            Pl.append(1)
+            Ql = []
+            Ql.append(1)
+            Tl = []
+            bignum_from_i64(13591409, Tl)
+            sT = 1
+        else:
+            p1 = (6 * a - 5) * (2 * a - 1) * (6 * a - 1)
+            Pl = []
+            bignum_from_i64(p1, Pl)
+            Ql = []
+            bignum_from_i64(10939058860032000, Ql)
+            t = []
+            bignum_mul_small(Ql, len(Ql), a, t)
+            t2 = []
+            bignum_mul_small(t, len(t), a, t2)
+            Ql = []
+            bignum_mul_small(t2, len(t2), a, Ql)
+            s = 13591409 + 545140134 * a
+            Tl = []
+            bignum_mul_small(Pl, len(Pl), s, Tl)
+            sT = 1
+            if a % 2 == 1:
+                sT = -1
+        res = []
+        res.append(len(Pl))
+        i = 0
+        while i < len(Pl):
+            res.append(Pl[i])
+            i = i + 1
+        res.append(len(Ql))
+        i = 0
+        while i < len(Ql):
+            res.append(Ql[i])
+            i = i + 1
+        res.append(len(Tl))
+        res.append(sT)
+        i = 0
+        while i < len(Tl):
+            res.append(Tl[i])
+            i = i + 1
+        return res
+    m = (a + b) // 2
+    L = bs_chudnovsky(a, m)
+    R = bs_chudnovsky(m, b)
+    nPl = L[0]
+    offQ = nPl + 1
+    nQl = L[offQ]
+    offT = offQ + nQl + 1
+    nTl = L[offT]
+    sTl = L[offT + 1]
+    Pl = []
+    i = 1
+    while i <= nPl:
+        Pl.append(L[i])
+        i = i + 1
+    Ql = []
+    i = offQ + 1
+    while i <= offQ + nQl:
+        Ql.append(L[i])
+        i = i + 1
+    Tl = []
+    i = offT + 2
+    while i <= offT + 1 + nTl:
+        Tl.append(L[i])
+        i = i + 1
+    nPr = R[0]
+    offQ = nPr + 1
+    nQr = R[offQ]
+    offT = offQ + nQr + 1
+    nTr = R[offT]
+    sTr = R[offT + 1]
+    Pr = []
+    i = 1
+    while i <= nPr:
+        Pr.append(R[i])
+        i = i + 1
+    Qr = []
+    i = offQ + 1
+    while i <= offQ + nQr:
+        Qr.append(R[i])
+        i = i + 1
+    Tr = []
+    i = offT + 2
+    while i <= offT + 1 + nTr:
+        Tr.append(R[i])
+        i = i + 1
+    P = bignum_mul(Pl, len(Pl), Pr, len(Pr))
+    Q = bignum_mul(Ql, len(Ql), Qr, len(Qr))
+    T1 = bignum_mul(Tl, len(Tl), Qr, len(Qr))
+    T2 = bignum_mul(Pl, len(Pl), Tr, len(Tr))
+    # T = sTl*|T1| + sTr*|T2| (hop doi dau)
+    v1 = sTl
+    v2 = sTr
+    sT = v1 + v2
+    if sT == 2:
+        T = bignum_add(T1, len(T1), T2, len(T2))
+        sT = 1
+    else:
+        if sT == -2:
+            T = bignum_add(T1, len(T1), T2, len(T2))
+            sT = -1
+        else:
+            cv = bignum_cmp(T1, len(T1), T2, len(T2))
+            if v1 == 1:
+                if cv >= 0:
+                    T = bignum_sub(T1, len(T1), T2, len(T2))
+                    sT = 1
+                else:
+                    T = bignum_sub(T2, len(T2), T1, len(T1))
+                    sT = -1
+            else:
+                if cv >= 0:
+                    T = bignum_sub(T1, len(T1), T2, len(T2))
+                    sT = -1
+                else:
+                    T = bignum_sub(T2, len(T2), T1, len(T1))
+                    sT = 1
+    res = []
+    res.append(len(P))
+    i = 0
+    while i < len(P):
+        res.append(P[i])
+        i = i + 1
+    res.append(len(Q))
+    i = 0
+    while i < len(Q):
+        res.append(Q[i])
+        i = i + 1
+    res.append(len(T))
+    res.append(sT)
+    i = 0
+    while i < len(T):
+        res.append(T[i])
+        i = i + 1
+    return res
+
+
+def pi_chudnovsky(prec_digits: "i32", out: "list[i64]") -> "i32":
+    # pi*10^p = 426880 * floor(sqrt(10005*10^(2p))) * Q // T
+    N = prec_digits // 14 + 1
+    bs = bs_chudnovsky(0, N)
+    nP = bs[0]
+    offQ = nP + 1
+    nQ = bs[offQ]
+    offT = offQ + nQ + 1
+    nT = bs[offT]
+    sT = bs[offT + 1]
+    Q = []
+    i = offQ + 1
+    while i <= offQ + nQ:
+        Q.append(bs[i])
+        i = i + 1
+    T = []
+    i = offT + 2
+    while i <= offT + 1 + nT:
+        T.append(bs[i])
+        i = i + 1
+    if sT == -1:
+        T = bignum_neg(T, len(T))
+    s10005 = []
+    bignum_from_i64(10005, s10005)
+    sq = sqrt_bignum(s10005, len(s10005), prec_digits)
+    n1 = []
+    bignum_mul_small(sq, len(sq), 426880, n1)
+    nq = bignum_mul(n1, len(n1), Q, len(Q))
+    # bignum_div_to_digits tra cac chu so thap nhan cua thuong nguyen.
+    # Pi*10^p co p+1 chu co, nen phai lay them p chi so thap de bo cac
+    # zero dan dau truoc khi chuan hoa thanh p+1 chu so.
+    den_digits = []
+    bignum_to_string(T, len(T), 0, den_digits)
+    raw = []
+    raw_count = bignum_div_to_digits(nq, T, len(den_digits) + prec_digits + 2, raw)
+    first = 0
+    while first < raw_count and raw[first] == 0:
+        first = first + 1
+    while first < raw_count and len(out) <= prec_digits:
+        out.append(raw[first])
+        first = first + 1
+    return len(out)
+
+
+# ---- e: spigot giai thua (mang a[k], k = 2..N+1, khoi tao 1) ----
+
+def e_spigot(prec_digits: "i32", out: "list[i64]") -> "i32":
+    # e = 2 + sum_{k>=2} 1/k!. He so a[k] trong co so giai thua
+    # (a[k] < k). Moi buoc: nhan 10, day carry tu N+1 ve 2, chu so moi =
+    # carry ra khoi muc 2. Khoang 1 chu so dung can N tang khoang
+    # ln(10)/... thuc te: N = prec + 30 du cho prec <= 500.
+    N = prec_digits + 30
+    a = []
+    i = 0
+    while i <= N + 1:
+        a.append(1)
+        i = i + 1
+    out.append(2)
+    cnt = 1
+    while cnt < prec_digits:
+        carry = 0
+        k = N + 1
+        while k >= 2:
+            x = a[k] * 10 + carry
+            a[k] = x - (x // k) * k
+            carry = x // k
+            k = k - 1
+        out.append(carry)
+        cnt = cnt + 1
+    return cnt
+
+
+def e_vandermonde(prec_digits: "i32", out: "list[i64]") -> "i32":
+    return e_spigot(prec_digits, out)
+
+
+# ---------------- KIEM THU ----------------
+# Tham chieu 100 chu so (so sanh doc lap voi bang chuan):
+# sqrt(2) = 1.4142135623730950488016887242096980785696718753769480731766797379907324784621070388503875343276415727
+# pi      = 3.1415926535897932384626433832795028841971693993751058209749445923078164062862089986280348253421170679
+# e       = 2.7182818284590452353602874713526624977572470936999595749669676277240766303535475945713821785251664274
+
+def t1_sqrt2() -> "i32":
+    ref = [1, 4, 1, 4, 2, 1, 3, 5, 6, 2, 3, 7, 3, 0, 9, 5, 0, 4, 8, 8,
+           0, 1, 6, 8, 8, 7, 2, 4, 2, 0, 9, 6, 9, 8, 0, 7, 8, 5, 6, 9,
+           6, 7, 1, 8, 7, 5, 3, 7, 6, 9, 4, 8, 0, 7, 3, 1, 7, 6, 6, 7,
+           9, 7, 3, 7, 9, 9, 0, 7, 3, 2, 4, 7, 8, 4, 6, 2, 1, 0, 7, 0,
+           3, 8, 8, 5, 0, 3, 8, 7, 5, 3, 4, 3, 2, 7, 6, 4, 1, 5, 7, 2]
+    two = []
+    bignum_from_i64(2, two)
+    sq = sqrt_bignum(two, len(two), 100)
+    sd = []
+    ns = bignum_to_string(sq, len(sq), 0, sd)
+    i = 0
+    while i < ns and sd[i] == 0:
+        i = i + 1
+    j = 0
+    while j < 100:
+        if i + j >= ns:
+            return 0
+        if sd[i + j] != ref[j]:
+            return 0
+        j = j + 1
+    return 1
+
+
+def t2_pi_chud() -> "i32":
+    ref = [3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9, 3, 2, 3, 8, 4,
+           6, 2, 6, 4, 3, 3, 8, 3, 2, 7, 9, 5, 0, 2, 8, 8, 4, 1, 9, 7,
+           1, 6, 9, 3, 9, 9, 3, 7, 5, 1, 0, 5, 8, 2, 0, 9, 7, 4, 9, 4,
+           4, 5, 9, 2, 3, 0, 7, 8, 1, 6, 4, 0, 6, 2, 8, 6, 2, 0, 8, 9,
+           9, 8, 6, 2, 8, 0, 3, 4, 8, 2, 5, 3, 4, 2, 1, 1, 7, 0, 6, 7]
+    outd = []
+    pi_chudnovsky(100, outd)
+    if len(outd) < 100:
+        print("pi length:", len(outd))
+        return 0
+    j = 0
+    while j < 100:
+        if outd[j] != ref[j]:
+            print("pi mismatch:", j, outd[j], ref[j])
+            return 0
+        j = j + 1
+    return 1
+
+
+def t3_e() -> "i32":
+    ref = [2, 7, 1, 8, 2, 8, 1, 8, 2, 8, 4, 5, 9, 0, 4, 5, 2, 3, 5, 3,
+           6, 0, 2, 8, 7, 4, 7, 1, 3, 5, 2, 6, 6, 2, 4, 9, 7, 7, 5, 7,
+           2, 4, 7, 0, 9, 3, 6, 9, 9, 9, 5, 9, 5, 7, 4, 9, 6, 6, 9, 6,
+           7, 6, 2, 7, 7, 2, 4, 0, 7, 6, 6, 3, 0, 3, 5, 3, 5, 4, 7, 5,
+           9, 4, 5, 7, 1, 3, 8, 2, 1, 7, 8, 5, 2, 5, 1, 6, 6, 4, 2, 7]
+    outd = []
+    e_spigot(100, outd)
+    if len(outd) < 100:
+        return 0
+    j = 0
+    while j < 100:
+        if outd[j] != ref[j]:
+            return 0
+        j = j + 1
+    return 1
+
+
+def t4_arith() -> "i32":
+    a = []
+    bignum_from_i64(123456789, a)
+    b = []
+    bignum_from_i64(987654321, b)
+    c = bignum_mul(a, len(a), b, len(b))
+    ref = []
+    bignum_from_i64(121932631112635269, ref)
+    if bignum_cmp(c, len(c), ref, len(ref)) != 0:
+        return 0
+    s = bignum_add(a, len(a), b, len(b))
+    refs = []
+    bignum_from_i64(1111111110, refs)
+    if bignum_cmp(s, len(s), refs, len(refs)) != 0:
+        return 0
+    d = bignum_sub(refs, len(refs), a, len(a))
+    refd = []
+    bignum_from_i64(987654321, refd)
+    if bignum_cmp(d, len(d), refd, len(refd)) != 0:
+        return 0
+    return 1
+
+
+def t5_div_digits() -> "i32":
+    # 1/7 = 0.142857142857... lay 20 chu so sau dau 0
+    num = []
+    bignum_from_i64(1, num)
+    den = []
+    bignum_from_i64(7, den)
+    out = []
+    bignum_div_to_digits(num, den, 20, out)
+    exp = [0, 1, 4, 2, 8, 5, 7, 1, 4, 2, 8, 5, 7, 1, 4, 2, 8, 5, 7, 1]
+    i = 0
+    while i < 20:
+        if out[i] != exp[i]:
+            return 0
+        i = i + 1
+    return 1
+
+
+def t6_bigmul_long() -> "i32":
+    # a = 1 + (10^4)^11 = 1 + 10^44; a^2 = 10^88 + 2*10^44 + 1 (89 chu so)
+    a = []
+    a.append(1)
+    i = 0
+    while i < 10:
+        a.append(0)
+        i = i + 1
+    a.append(1)
+    c = bignum_mul(a, len(a), a, len(a))
+    sd = []
+    n = bignum_to_string(c, len(c), 0, sd)
+    if n != 89:
+        return 0
+    if sd[0] != 1 or sd[44] != 2 or sd[88] != 1:
+        return 0
+    i = 1
+    while i < 44:
+        if sd[i] != 0:
+            return 0
+        i = i + 1
+    i = 45
+    while i < 88:
+        if sd[i] != 0:
+            return 0
+        i = i + 1
+    return 1
+
+
+def t7_bignum_neg() -> "i32":
+    a = []
+    bignum_from_i64(123456789, a)
+    n = bignum_neg(a, len(a))
+    if len(n) != 3 or n[0] != 3211 or n[1] != 7654 or n[2] != 9998:
+        print("neg mismatch 1:", len(n), n[0], n[1], n[2])
+        return 0
+    a2 = []
+    a2.append(0)
+    a2.append(1)
+    n2v = bignum_neg(a2, 2)
+    if len(n2v) != 2 or n2v[0] != 0 or n2v[1] != 9999:
+        print("neg mismatch 2:", len(n2v), n2v)
+        return 0
+    return 1
+
+
+def t8_precision_borders() -> "i32":
+    two = []
+    bignum_from_i64(2, two)
+    s5 = sqrt_bignum(two, len(two), 5)
+    s5d = []
+    bignum_to_string(s5, len(s5), 0, s5d)
+    s5ref = [1, 4, 1, 4, 2, 1]
+    i = 0
+    while i < 6:
+        if s5d[i] != s5ref[i]:
+            return 0
+        i = i + 1
+    p10 = []
+    pi_chudnovsky(10, p10)
+    p10ref = [3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5]
+    i = 0
+    while i < 11:
+        if p10[i] != p10ref[i]:
+            return 0
+        i = i + 1
+    e10 = []
+    e_spigot(10, e10)
+    e10ref = [2, 7, 1, 8, 2, 8, 1, 8, 2, 8]
+    i = 0
+    while i < 10:
+        if e10[i] != e10ref[i]:
+            return 0
+        i = i + 1
+    return 1
+
+
+def main() -> "i32":
+    total = 8
+    npass = 0
+    if t4_arith() == 1:
+        npass = npass + 1
+        print("t4_arith: OK")
+    else:
+        print("t4_arith: FAIL")
+    if t5_div_digits() == 1:
+        npass = npass + 1
+        print("t5_div: OK")
+    else:
+        print("t5_div: FAIL")
+    if t6_bigmul_long() == 1:
+        npass = npass + 1
+        print("t6_bigmul: OK")
+    else:
+        print("t6_bigmul: FAIL")
+    if t1_sqrt2() == 1:
+        npass = npass + 1
+        print("t1_sqrt2(100 cs): OK")
+    else:
+        print("t1_sqrt2: FAIL")
+    if t2_pi_chud() == 1:
+        npass = npass + 1
+        print("t2_pi_chud(100 cs): OK")
+    else:
+        print("t2_pi_chud: FAIL")
+    if t3_e() == 1:
+        npass = npass + 1
+        print("t3_e(100 cs): OK")
+    else:
+        print("t3_e: FAIL")
+    if t7_bignum_neg() == 1:
+        npass = npass + 1
+        print("t7_bignum_neg: OK")
+    else:
+        print("t7_bignum_neg: FAIL")
+    if t8_precision_borders() == 1:
+        npass = npass + 1
+        print("t8_precision_borders: OK")
+    else:
+        print("t8_precision_borders: FAIL")
+    if npass == total:
+        print("PASS", npass, "/", total, "- bigfloat OK")
+    else:
+        print("FAIL", npass, "/", total, "- bigfloat")
+    return 0
